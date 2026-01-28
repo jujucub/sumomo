@@ -1,6 +1,6 @@
 /**
  * sumomo - GitHub Poller
- * GitHub Issue を定期的にポーリングして @sumomo メンションを検出する
+ * GitHub Issue を定期的にポーリングして [sumomo] タグを検出する
  */
 
 import { Octokit } from '@octokit/rest';
@@ -131,7 +131,7 @@ async function PollRepoIssues(
     // 既に処理済みの場合はスキップ
     if (_processedIssues.has(issueKey)) continue;
 
-    // Issue 本文に @sumomo が含まれているかチェック
+    // Issue 本文に [sumomo] が含まれているかチェック
     const body = issue.body ?? '';
     if (!ContainsSumomoMention(body)) {
       // コメントもチェック
@@ -153,7 +153,7 @@ async function PollRepoIssues(
     // 処理対象として記録
     _processedIssues.add(issueKey);
 
-    console.log(`Found issue with @sumomo mention: ${issueKey}`);
+    console.log(`Found issue with [sumomo] tag: ${issueKey}`);
 
     const metadata: GitHubTaskMetadata = {
       source: 'github',
@@ -172,7 +172,7 @@ async function PollRepoIssues(
 }
 
 /**
- * コメントに @sumomo が含まれているかチェックする
+ * コメントに [sumomo] が含まれているかチェックする
  */
 async function CheckCommentsForMention(
   owner: string,
@@ -202,11 +202,11 @@ async function CheckCommentsForMention(
 }
 
 /**
- * テキストに @sumomo メンションが含まれているかチェックする
+ * テキストに [sumomo] タグが含まれているかチェックする
  */
 function ContainsSumomoMention(text: string): boolean {
-  // GitHub の @sumomo メンション、または plain text の @sumomo
-  return text.toLowerCase().includes('@sumomo');
+  // [sumomo] タグを検出（大文字小文字を区別しない）
+  return text.toLowerCase().includes('[sumomo]');
 }
 
 /**
