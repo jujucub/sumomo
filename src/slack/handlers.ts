@@ -92,7 +92,7 @@ export function RegisterSlackHandlers(
 
     if (!prompt) {
       await say({
-        text: '何をお手伝いしましょうか？',
+        text: 'はいっ！何をお手伝いしましょうか〜？ご用件をお聞かせくださいなのです！',
         thread_ts: threadTs,
       });
       return;
@@ -100,7 +100,7 @@ export function RegisterSlackHandlers(
 
     // スレッドで処理開始を通知
     await say({
-      text: '🍑 処理を開始します...',
+      text: '🍑 あいっ！処理を開始するのでーす！',
       thread_ts: threadTs,
     });
 
@@ -407,13 +407,13 @@ export async function RequestApproval(
     void app.client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
-      text: `🍑 実行許可リクエスト: ${tool}`,
+      text: `🍑 実行許可リクエストなのです: ${tool}`,
       blocks: [
         {
           type: 'header',
           text: {
             type: 'plain_text',
-            text: '🍑 sumomo 実行許可リクエスト',
+            text: '🍑 すももからの実行許可リクエストであります！',
             emoji: true,
           },
         },
@@ -514,13 +514,13 @@ export async function AskQuestion(
     void app.client.chat.postMessage({
       channel: channelId,
       thread_ts: threadTs,
-      text: `🍑 質問: ${question}`,
+      text: `🍑 お聞きしたいことがあるのです: ${question}`,
       blocks: [
         {
           type: 'header',
           text: {
             type: 'plain_text',
-            text: '🍑 sumomo からの質問',
+            text: '🍑 すももからの質問なのでーす！',
             emoji: true,
           },
         },
@@ -554,13 +554,13 @@ export async function CreateIssueThread(
 ): Promise<string> {
   const result = await app.client.chat.postMessage({
     channel: channelId,
-    text: `🍑 GitHub Issue の処理を開始します`,
+    text: `🍑 あいっ！GitHub Issue の処理を開始するのでーす！`,
     blocks: [
       {
         type: 'header',
         text: {
           type: 'plain_text',
-          text: '🍑 GitHub Issue 処理開始',
+          text: '🍑 GitHub Issue 処理開始であります！',
           emoji: true,
         },
       },
@@ -576,7 +576,7 @@ export async function CreateIssueThread(
         elements: [
           {
             type: 'mrkdwn',
-            text: '処理の進捗はこのスレッドに投稿されます',
+            text: '処理の進捗はこのスレッドに投稿するのです！お楽しみに〜♪',
           },
         ],
       },
@@ -598,7 +598,7 @@ export async function NotifyTaskStarted(
 ): Promise<string> {
   const result = await app.client.chat.postMessage({
     channel: channelId,
-    text: `🍑 処理を開始します: ${description}`,
+    text: `🍑 了解であります！処理を開始するのでーす: ${description}`,
     thread_ts: threadTs,
   });
   return result.ts ?? '';
@@ -615,9 +615,9 @@ export async function NotifyTaskCompleted(
   prUrl?: string,
   threadTs?: string
 ): Promise<void> {
-  let text = `🍑 ${message}`;
+  let text = `🍑 任務完了であります！${message}`;
   if (prUrl) {
-    text += `\nPR: ${prUrl}`;
+    text += `\nPRを作成したのでーす: ${prUrl}`;
   }
 
   await app.client.chat.postMessage({
@@ -639,7 +639,7 @@ export async function NotifyError(
 ): Promise<void> {
   await app.client.chat.postMessage({
     channel: channelId,
-    text: `🍑 エラーが発生しました: ${error}`,
+    text: `🍑 あわわ…エラーが発生してしまったのです…: ${error}`,
     thread_ts: threadTs,
   });
 }
