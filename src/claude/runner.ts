@@ -4,7 +4,6 @@
  */
 
 import { spawn, type ChildProcess } from 'child_process';
-import type { TaskResult } from '../types/index.js';
 
 // 出力コールバック
 export type OutputCallback = (chunk: string, type: 'stdout' | 'stderr') => void;
@@ -15,6 +14,16 @@ export interface RunnerOptions {
   readonly timeout?: number;
   readonly maxOutputSize?: number;
   readonly onOutput?: OutputCallback;
+  readonly resumeSessionId?: string; // 継続するセッションID
+}
+
+// 実行結果（セッションID付き）
+export interface RunResult {
+  readonly success: boolean;
+  readonly output: string;
+  readonly prUrl?: string;
+  readonly error?: string;
+  readonly sessionId?: string; // ClaudeセッションID
 }
 
 // 実行中のプロセス管理
@@ -45,7 +54,7 @@ export class ClaudeRunner {
     taskId: string,
     prompt: string,
     options: RunnerOptions
-  ): Promise<TaskResult> {
+  ): Promise<RunResult> {
     const timeout = options.timeout ?? this._defaultTimeout;
     const maxOutputSize = options.maxOutputSize ?? this._maxOutputSize;
 
@@ -56,13 +65,30 @@ export class ClaudeRunner {
 
       console.log(`Starting Claude CLI with prompt: ${prompt.slice(0, 100)}...`);
       console.log(`Working directory: ${options.workingDirectory}`);
+      if (options.resumeSessionId) {
+        console.log(`Resuming session: ${options.resumeSessionId}`);
+      }
 
-      // Claude CLI を起動（-p オプションで非対話モード）
+      // コマンドライン引数を構築
+      const args: string[] = [];
+
+      // セッション継続の場合は --resume を追加
+      if (options.resumeSessionId) {
+        args.push('--resume', options.resumeSessionId);
+      }
+
+      // プロンプトを追加
+      args.push('-p', prompt);
+
+      // セッションIDを取得するためにJSON出力を使用
+      args.push('--output-format', 'json');
+
+      // Claude CLI を起動
       // CLAUDE_PROJECT_DIR を設定して、親ディレクトリの設定を使用
       const projectDir = process.cwd(); // sumomo本体のディレクトリ
       const claudeProcess = spawn(
         'claude',
-        ['-p', prompt],
+        args,
         {
           cwd: options.workingDirectory,
           env: {
@@ -135,19 +161,24 @@ export class ClaudeRunner {
           clearTimeout(timeoutHandle);
           this._runningProcesses.delete(taskId);
 
+          // JSON出力からセッションIDとテキストを抽出
+          const { textOutput, sessionId } = this._parseJsonOutput(stdout);
+
           if (code === 0) {
             // PR URL を出力から抽出
-            const prUrl = this._extractPrUrl(stdout);
+            const prUrl = this._extractPrUrl(textOutput);
             resolve({
               success: true,
-              output: stdout,
+              output: textOutput,
               prUrl,
+              sessionId,
             });
           } else {
             resolve({
               success: false,
-              output: stdout,
+              output: textOutput,
               error: stderr || `Process exited with code ${code}`,
+              sessionId,
             });
           }
         }
@@ -263,6 +294,66 @@ export class ClaudeRunner {
     const prUrlPattern = /https:\/\/github\.com\/[^\/]+\/[^\/]+\/pull\/\d+/;
     const match = output.match(prUrlPattern);
     return match ? match[0] : undefined;
+  }
+
+  /**
+   * JSON出力をパースしてテキストとセッションIDを抽出する
+   * Claude CLIの--output-format json出力形式:
+   * 各行がJSONオブジェクト（JSON Lines形式）
+   * {
+   *   "type": "assistant",
+   *   "message": { "content": [...] },
+   *   "session_id": "..."
+   * }
+   */
+  private _parseJsonOutput(output: string): {
+    textOutput: string;
+    sessionId?: string;
+  } {
+    const lines = output.split('\n');
+    const textParts: string[] = [];
+    let sessionId: string | undefined;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      try {
+        const json = JSON.parse(trimmed);
+
+        // セッションIDを取得
+        if (json.session_id) {
+          sessionId = json.session_id;
+        }
+
+        // テキストコンテンツを抽出
+        if (json.type === 'assistant' && json.message?.content) {
+          for (const block of json.message.content) {
+            if (block.type === 'text' && block.text) {
+              textParts.push(block.text);
+            }
+          }
+        }
+
+        // resultフィールドがある場合（最終出力）
+        if (json.result) {
+          textParts.push(json.result);
+        }
+
+        // 直接textフィールドがある場合
+        if (json.text && typeof json.text === 'string') {
+          textParts.push(json.text);
+        }
+      } catch {
+        // JSONでない行はそのまま出力に追加
+        textParts.push(trimmed);
+      }
+    }
+
+    return {
+      textOutput: textParts.join('\n'),
+      sessionId,
+    };
   }
 }
 

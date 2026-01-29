@@ -7,6 +7,7 @@ import { LoadConfig } from './config.js';
 import type { Config, GitHubTaskMetadata, SlackTaskMetadata, Task } from './types/index.js';
 import { GetTaskQueue, type TaskQueue } from './queue/taskQueue.js';
 import { GetClaudeRunner, type ClaudeRunner } from './claude/runner.js';
+import { GetSessionStore } from './session/store.js';
 import {
   InitSlackBot,
   StartSlackBot,
@@ -195,6 +196,15 @@ async function ProcessNextTask(): Promise<void> {
       // Slack の場合は通常の処理（出力をスレッドに投稿）
       const slackApp = GetSlackBot();
       const slackMeta = task.metadata;
+      const sessionStore = GetSessionStore();
+
+      // 同じスレッドの既存セッションを取得
+      const existingSessionId = sessionStore.Get(slackMeta.threadTs, slackMeta.userId);
+      if (existingSessionId) {
+        console.log(`Resuming existing session for thread ${slackMeta.threadTs}: ${existingSessionId}`);
+      } else {
+        console.log(`Creating new session for thread ${slackMeta.threadTs}`);
+      }
 
       let lastPostTime = 0;
       let outputBuffer = '';
@@ -222,10 +232,19 @@ async function ProcessNextTask(): Promise<void> {
         }
       };
 
-      result = await _claudeRunner.Run(task.id, task.prompt, {
+      const runResult = await _claudeRunner.Run(task.id, task.prompt, {
         workingDirectory: process.cwd(),
         onOutput,
+        resumeSessionId: existingSessionId,
       });
+
+      // 新しいセッションIDが返された場合は保存
+      if (runResult.sessionId) {
+        sessionStore.Set(slackMeta.threadTs, slackMeta.userId, runResult.sessionId);
+        console.log(`Session saved for thread ${slackMeta.threadTs}: ${runResult.sessionId}`);
+      }
+
+      result = runResult;
 
       // 残りのバッファを投稿
       if (outputBuffer.trim()) {
