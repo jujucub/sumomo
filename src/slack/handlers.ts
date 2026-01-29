@@ -10,7 +10,7 @@ import type {
   AllowedUsers,
 } from '../types/index.js';
 
-// ホワイトリスト（RegisterSlackHandlersで設定）
+// ホワイトリスト（RegisterSlackHandlersで設定、UpdateAllowedUsersで更新可能）
 let _allowedUsers: AllowedUsers | undefined;
 
 /**
@@ -21,6 +21,21 @@ function IsUserAllowed(userId: string): boolean {
   // ホワイトリストが空の場合は全員拒否
   if (_allowedUsers.slack.length === 0) return false;
   return _allowedUsers.slack.includes(userId);
+}
+
+/**
+ * Slackホワイトリストを動的に更新する
+ */
+export function UpdateAllowedUsers(slackUsers: readonly string[]): void {
+  if (!_allowedUsers) {
+    _allowedUsers = { github: [], slack: slackUsers };
+  } else {
+    _allowedUsers = {
+      ..._allowedUsers,
+      slack: slackUsers,
+    };
+  }
+  console.log(`Slack allowed users updated: ${slackUsers.length} users`);
 }
 
 // 承認待ちリクエストの管理

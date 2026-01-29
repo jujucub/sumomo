@@ -42,6 +42,11 @@ import {
   RemoveWorktree,
 } from './git/worktree.js';
 import { CleanupAllSessions } from './tmux/session.js';
+import {
+  InitAdminServer,
+  StartAdminServer,
+  StopAdminServer,
+} from './admin/server.js';
 
 // アプリケーション状態
 let _isRunning = false;
@@ -76,6 +81,10 @@ async function Start(): Promise<void> {
   InitGitHubPoller(_config);
   StartGitHubPoller(_config, HandleGitHubIssue, HandleIssueClosed);
 
+  // 管理サーバーを初期化・起動
+  InitAdminServer();
+  await StartAdminServer(_config.adminServerPort);
+
   // タスクキューのイベントを監視
   _taskQueue.On('added', OnTaskAdded);
 
@@ -93,6 +102,7 @@ async function Stop(): Promise<void> {
 
   // 各コンポーネントを停止
   StopGitHubPoller();
+  await StopAdminServer();
   await StopApprovalServer();
   await StopSlackBot();
 

@@ -16,6 +16,10 @@ interface PollerState {
 
 let _octokit: Octokit | undefined;
 let _allowedUsers: AllowedUsers | undefined;
+let _currentConfig: Config | undefined;
+let _currentOnIssueFound:
+  | ((metadata: GitHubTaskMetadata, prompt: string) => Promise<void>)
+  | undefined;
 let _state: PollerState = {
   isRunning: false,
   intervalId: null,
@@ -24,6 +28,46 @@ let _state: PollerState = {
 
 // 処理済み Issue の追跡（再起動時にリセット）
 const _processedIssues = new Set<string>();
+
+/**
+ * GitHubホワイトリストを動的に更新する
+ */
+export function UpdateAllowedUsers(githubUsers: readonly string[]): void {
+  if (!_allowedUsers) {
+    _allowedUsers = { github: githubUsers, slack: [] };
+  } else {
+    _allowedUsers = {
+      ..._allowedUsers,
+      github: githubUsers,
+    };
+  }
+  console.log(`GitHub allowed users updated: ${githubUsers.length} users`);
+}
+
+/**
+ * リポジトリ設定を更新してポーラーを再起動する
+ */
+export function UpdateRepos(repos: readonly string[]): void {
+  if (!_currentConfig || !_currentOnIssueFound) {
+    console.warn('Cannot update repos: Poller not initialized');
+    return;
+  }
+
+  // 設定を更新
+  _currentConfig = {
+    ..._currentConfig,
+    githubRepos: repos,
+  };
+
+  // ポーラーを再起動
+  if (_state.isRunning) {
+    console.log('Restarting GitHub poller with new repos...');
+    StopGitHubPoller();
+    StartGitHubPoller(_currentConfig, _currentOnIssueFound, _onIssueClosed);
+  }
+
+  console.log(`GitHub repos updated: ${repos.length} repos`);
+}
 
 /**
  * GitHubユーザーがホワイトリストに含まれているかチェック
@@ -69,6 +113,10 @@ export function StartGitHubPoller(
   if (!_octokit) {
     InitGitHubPoller(config);
   }
+
+  // 設定とコールバックを保存（UpdateRepos用）
+  _currentConfig = config;
+  _currentOnIssueFound = onIssueFound;
 
   _state.isRunning = true;
   _onIssueClosed = onIssueClosed;

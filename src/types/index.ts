@@ -100,6 +100,13 @@ export interface AllowedUsers {
   readonly slack: readonly string[];   // SlackユーザーID
 }
 
+// 管理UI用設定
+export interface AdminConfig {
+  allowedGithubUsers: string[];
+  allowedSlackUsers: string[];
+  githubRepos: string[];
+}
+
 // 設定
 export interface Config {
   readonly anthropicApiKey?: string; // Max Plan 使用時は不要
@@ -109,6 +116,7 @@ export interface Config {
   readonly githubToken: string;
   readonly githubRepos: readonly string[];
   readonly approvalServerPort: number;
+  readonly adminServerPort: number;
   readonly githubPollInterval: number;
   readonly allowedUsers: AllowedUsers;
 }

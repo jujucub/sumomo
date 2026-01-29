@@ -4,6 +4,7 @@
 
 import 'dotenv/config';
 import type { Config, AllowedUsers } from './types/index.js';
+import { LoadAdminConfig, HasAdminConfig } from './admin/store.js';
 
 /**
  * カンマ区切りの文字列を配列に変換する（空の場合は空配列）
@@ -44,10 +45,15 @@ export function LoadConfig(): Config {
     throw new Error('GITHUB_REPOS is required');
   }
 
-  const githubRepos = githubReposStr.split(',').map((repo) => repo.trim());
+  // 環境変数からのリポジトリ設定
+  const envGithubRepos = githubReposStr.split(',').map((repo) => repo.trim());
 
   const approvalServerPort = parseInt(
     process.env['APPROVAL_SERVER_PORT'] ?? '3001',
+    10
+  );
+  const adminServerPort = parseInt(
+    process.env['ADMIN_SERVER_PORT'] ?? '3002',
     10
   );
   const githubPollInterval = parseInt(
@@ -55,11 +61,34 @@ export function LoadConfig(): Config {
     10
   );
 
-  // ホワイトリスト設定（空の場合は全員拒否）
-  const allowedUsers: AllowedUsers = {
-    github: ParseCommaSeparatedList(process.env['ALLOWED_GITHUB_USERS']),
-    slack: ParseCommaSeparatedList(process.env['ALLOWED_SLACK_USERS']),
-  };
+  // admin-config.json が存在する場合は優先的に読み込む
+  let allowedUsers: AllowedUsers;
+  let githubRepos: readonly string[];
+
+  if (HasAdminConfig()) {
+    const adminConfig = LoadAdminConfig();
+    console.log('📋 Using admin-config.json for whitelist and repos');
+
+    allowedUsers = {
+      github: adminConfig.allowedGithubUsers.length > 0
+        ? adminConfig.allowedGithubUsers
+        : ParseCommaSeparatedList(process.env['ALLOWED_GITHUB_USERS']),
+      slack: adminConfig.allowedSlackUsers.length > 0
+        ? adminConfig.allowedSlackUsers
+        : ParseCommaSeparatedList(process.env['ALLOWED_SLACK_USERS']),
+    };
+
+    githubRepos = adminConfig.githubRepos.length > 0
+      ? adminConfig.githubRepos
+      : envGithubRepos;
+  } else {
+    // 環境変数から読み込む（従来の動作）
+    allowedUsers = {
+      github: ParseCommaSeparatedList(process.env['ALLOWED_GITHUB_USERS']),
+      slack: ParseCommaSeparatedList(process.env['ALLOWED_SLACK_USERS']),
+    };
+    githubRepos = envGithubRepos;
+  }
 
   // ホワイトリストが空の場合は警告
   if (allowedUsers.github.length === 0) {
@@ -77,6 +106,7 @@ export function LoadConfig(): Config {
     githubToken,
     githubRepos,
     approvalServerPort,
+    adminServerPort,
     githubPollInterval,
     allowedUsers,
   };

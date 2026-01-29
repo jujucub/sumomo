@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sumomo - 管理画面</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>sumomo 管理画面</h1>
+    <div id="auth-status"></div>
+  </header>
+
+  <main>
+    <!-- 認証フォーム -->
+    <div id="auth-form" class="card">
+      <h2>認証</h2>
+      <p>~/.sumomo/auth-token のトークンを入力してください</p>
+      <div class="form-group">
+        <input type="password" id="token-input" placeholder="認証トークン">
+        <button onclick="authenticate()">認証</button>
+      </div>
+    </div>
+
+    <!-- メインコンテンツ（認証後に表示） -->
+    <div id="main-content" style="display: none;">
+      <!-- タブナビゲーション -->
+      <nav class="tabs">
+        <button class="tab active" data-tab="github-users">GitHub ユーザー</button>
+        <button class="tab" data-tab="slack-users">Slack ユーザー</button>
+        <button class="tab" data-tab="github-repos">GitHub リポジトリ</button>
+      </nav>
+
+      <!-- GitHub ユーザー -->
+      <section id="github-users" class="tab-content active">
+        <div class="card">
+          <h2>GitHub ユーザー</h2>
+          <p class="description">GitHub Issue から [sumomo] タグでリクエストできるユーザー</p>
+
+          <div class="form-group">
+            <input type="text" id="github-user-input" placeholder="GitHubユーザー名">
+            <button onclick="addGithubUser()">追加</button>
+          </div>
+
+          <ul id="github-users-list" class="item-list"></ul>
+        </div>
+      </section>
+
+      <!-- Slack ユーザー -->
+      <section id="slack-users" class="tab-content">
+        <div class="card">
+          <h2>Slack ユーザー</h2>
+          <p class="description">Slack でメンションしてリクエストできるユーザー（ユーザーID）</p>
+
+          <div class="form-group">
+            <input type="text" id="slack-user-input" placeholder="SlackユーザーID (例: U12345678)">
+            <button onclick="addSlackUser()">追加</button>
+          </div>
+
+          <ul id="slack-users-list" class="item-list"></ul>
+        </div>
+      </section>
+
+      <!-- GitHub リポジトリ -->
+      <section id="github-repos" class="tab-content">
+        <div class="card">
+          <h2>GitHub リポジトリ</h2>
+          <p class="description">監視対象のリポジトリ（owner/repo形式）</p>
+
+          <div class="form-group">
+            <input type="text" id="github-repo-input" placeholder="owner/repo">
+            <button onclick="addGithubRepo()">追加</button>
+          </div>
+
+          <ul id="github-repos-list" class="item-list"></ul>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p>sumomo 管理画面 - ローカルアクセスのみ対応</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
