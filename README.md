@@ -94,5 +94,3 @@ npm start
 ## ライセンス
 
 MIT
-
-Hello
