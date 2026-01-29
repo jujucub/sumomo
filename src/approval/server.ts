@@ -3,9 +3,13 @@
  * PreToolUse Hook からの承認リクエストを処理する Express サーバー
  */
 
-import express, { type Express, type Request, type Response } from 'express';
+import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import type { Server } from 'http';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import type { App } from '@slack/bolt';
 import type { HookInput, HookOutput } from '../types/index.js';
 import { RequestApproval, AskQuestion } from '../slack/handlers.js';
@@ -14,9 +18,65 @@ import { RequestApproval, AskQuestion } from '../slack/handlers.js';
 let _server: Server | undefined;
 let _app: Express | undefined;
 
+// 認証トークン
+let _authToken: string | undefined;
+const AUTH_TOKEN_DIR = path.join(os.homedir(), '.sumomo');
+const AUTH_TOKEN_FILE = path.join(AUTH_TOKEN_DIR, 'auth-token');
+
 // Slack Bot への参照（承認リクエスト送信用）
 let _slackApp: App | undefined;
 let _slackChannelId: string | undefined;
+
+/**
+ * 認証トークンを生成してファイルに保存する
+ */
+function GenerateAuthToken(): string {
+  const token = crypto.randomBytes(32).toString('hex');
+
+  // ディレクトリがなければ作成
+  if (!fs.existsSync(AUTH_TOKEN_DIR)) {
+    fs.mkdirSync(AUTH_TOKEN_DIR, { mode: 0o700 });
+  }
+
+  // トークンをファイルに保存（所有者のみ読み書き可能）
+  fs.writeFileSync(AUTH_TOKEN_FILE, token, { mode: 0o600 });
+
+  console.log(`Auth token saved to ${AUTH_TOKEN_FILE}`);
+  return token;
+}
+
+/**
+ * 認証トークンを検証するミドルウェア
+ * タイミング攻撃を防ぐため、定数時間比較を使用
+ */
+function AuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+  // ヘルスチェックは認証不要
+  if (req.path === '/health') {
+    next();
+    return;
+  }
+
+  const token = req.headers['x-auth-token'] as string | undefined;
+
+  if (!token || !_authToken) {
+    console.warn(`Unauthorized request to ${req.path} from ${req.ip}`);
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  // タイミング攻撃を防ぐため、定数時間比較を使用
+  const tokenBuffer = Buffer.from(token);
+  const authTokenBuffer = Buffer.from(_authToken);
+
+  if (tokenBuffer.length !== authTokenBuffer.length ||
+      !crypto.timingSafeEqual(tokenBuffer, authTokenBuffer)) {
+    console.warn(`Unauthorized request to ${req.path} from ${req.ip}`);
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  next();
+}
 
 // 現在のタスクID（承認リクエストに紐付ける）
 let _currentTaskId: string | undefined;
@@ -44,8 +104,14 @@ export function InitApprovalServer(
   _slackApp = slackApp;
   _slackChannelId = channelId;
 
+  // 認証トークンを生成
+  _authToken = GenerateAuthToken();
+
   _app = express();
   _app.use(express.json());
+
+  // 認証ミドルウェアを追加
+  _app.use(AuthMiddleware);
 
   // ヘルスチェック
   _app.get('/health', (_req: Request, res: Response) => {
@@ -123,6 +189,7 @@ export function InitApprovalServer(
 
 /**
  * 承認サーバーを起動する
+ * セキュリティのため 127.0.0.1 のみにバインド
  */
 export function StartApprovalServer(port: number): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -131,8 +198,9 @@ export function StartApprovalServer(port: number): Promise<void> {
       return;
     }
 
-    _server = _app.listen(port, () => {
-      console.log(`Approval server started on port ${port}`);
+    // 127.0.0.1 のみにバインド（外部からのアクセスを防止）
+    _server = _app.listen(port, '127.0.0.1', () => {
+      console.log(`Approval server started on 127.0.0.1:${port} (localhost only)`);
       resolve();
     });
 
@@ -145,6 +213,13 @@ export function StartApprovalServer(port: number): Promise<void> {
  */
 export function StopApprovalServer(): Promise<void> {
   return new Promise((resolve) => {
+    // 認証トークンファイルを削除
+    if (fs.existsSync(AUTH_TOKEN_FILE)) {
+      fs.unlinkSync(AUTH_TOKEN_FILE);
+      console.log('Auth token file removed');
+    }
+    _authToken = undefined;
+
     if (_server) {
       _server.close(() => {
         console.log('Approval server stopped');

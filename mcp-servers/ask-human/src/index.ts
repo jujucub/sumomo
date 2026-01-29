@@ -18,10 +18,30 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 // 承認サーバーのURL（環境変数またはデフォルト）
 const APPROVAL_SERVER_URL =
-  process.env['APPROVAL_SERVER_URL'] ?? 'http://localhost:3001';
+  process.env['APPROVAL_SERVER_URL'] ?? 'http://127.0.0.1:3001';
+
+// 認証トークンファイル
+const AUTH_TOKEN_FILE = path.join(os.homedir(), '.sumomo', 'auth-token');
+
+/**
+ * 認証トークンをファイルから読み取る
+ */
+function ReadAuthToken(): string | undefined {
+  try {
+    if (fs.existsSync(AUTH_TOKEN_FILE)) {
+      return fs.readFileSync(AUTH_TOKEN_FILE, 'utf-8').trim();
+    }
+  } catch (error) {
+    console.error('Failed to read auth token:', error);
+  }
+  return undefined;
+}
 
 // ツール定義
 const ASK_HUMAN_TOOL: Tool = {
@@ -140,6 +160,12 @@ async function AskHuman(
   options?: string[],
   context?: string
 ): Promise<string> {
+  // 認証トークンを読み取る
+  const authToken = ReadAuthToken();
+  if (!authToken) {
+    throw new Error('Auth token not found - is sumomo running?');
+  }
+
   const requestBody = {
     question,
     options: options ?? [],
@@ -150,11 +176,15 @@ async function AskHuman(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-Auth-Token': authToken,
     },
     body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Unauthorized - invalid auth token');
+    }
     throw new Error(`HTTP error: ${response.status}`);
   }
 
