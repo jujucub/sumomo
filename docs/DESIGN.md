@@ -16,8 +16,9 @@ GitHub Issue や Slack メンションをトリガーに、ローカル環境の
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                              Slack                                      │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐ │
-│  │ @sumomo 指示    │  │ 承認ボタン      │  │ sumomoからの質問        │ │
-│  │ 「このバグ直して」│  │ [許可] [拒否]   │  │ 「AとBどちらにする？」   │ │
+│  │ @sumomo 指示    │  │ 承認モーダル    │  │ Issueスレッド           │ │
+│  │ 「このバグ直して」│  │ [許可] [拒否]   │  │ 進捗通知                │ │
+│  │                 │  │ + コメント入力  │  │                         │ │
 │  └────────┬────────┘  └────────┬────────┘  └────────────┬────────────┘ │
 └───────────┼────────────────────┼────────────────────────┼───────────────┘
             │                    │                        │
@@ -38,22 +39,44 @@ GitHub Issue や Slack メンションをトリガーに、ローカル環境の
 │  │                  │  タスクキュー   │                              ││
 │  │                  └────────┬────────┘                              ││
 │  │                           │                                       ││
-│  └───────────────────────────┼────────────────────────────────────────┘│
-│                              │                                         │
-│                              ▼                                         │
-│  ┌────────────────────────────────────────────────────────────────────┐│
-│  │  Claude CLI                                                        ││
+│  │         ┌─────────────────┼─────────────────┐                     ││
+│  │         ▼                                   ▼                     ││
+│  │  ┌─────────────────┐              ┌─────────────────────────────┐ ││
+│  │  │ Slackタスク     │              │ GitHub Issueタスク          │ ││
+│  │  │ 直接Claude実行  │              │ worktree + tmux             │ ││
+│  │  └─────────────────┘              └──────────────┬──────────────┘ ││
+│  │                                                  │                ││
+│  └──────────────────────────────────────────────────┼────────────────┘│
+│                                                     │                 │
+│  ┌──────────────────────────────────────────────────┼────────────────┐│
+│  │  Git worktree                                    │                ││
+│  │  ┌────────────────────────────────────────────┐  │                ││
+│  │  │ .worktrees/issue-{N}/                      │  │                ││
+│  │  │ ├── ブランチ: sumomo/issue-{N}             │  │                ││
+│  │  │ └── 独立した作業ディレクトリ               │  │                ││
+│  │  └────────────────────────────────────────────┘  │                ││
+│  └──────────────────────────────────────────────────┼────────────────┘│
+│                                                     │                 │
+│  ┌──────────────────────────────────────────────────┼────────────────┐│
+│  │  tmux セッション                                 │                ││
+│  │  ┌────────────────────────────────────────────┐  │                ││
+│  │  │ セッション名: sumomo-{owner}-{repo}-{N}   │◀─┘                ││
+│  │  │ ┌──────────────────────────────────────┐  │                   ││
+│  │  │ │ Claude CLI (対話モード)              │  │                   ││
+│  │  │ │ - ワークスペース信頼確認: 自動承認    │  │                   ││
+│  │  │ │ - 権限要求: tmux send-keys で応答    │  │                   ││
+│  │  │ └──────────────────────────────────────┘  │                   ││
+│  │  └────────────────────────────────────────────┘                   ││
+│  └───────────────────────────────────────────────────────────────────┘│
+│                                                                       │
+│  ┌───────────────────────────────────────────────────────────────────┐│
+│  │  PreToolUse Hook                                                  ││
 │  │  ┌──────────────────────────────────────────────────────────────┐ ││
-│  │  │ PreToolUse Hook                                              │ ││
-│  │  │ - 危険なコマンド → Slack承認                                  │ ││
-│  │  │ - 許可されたら実行                                           │ ││
+│  │  │ Edit/Write/Bash → slack-approval.py                          │ ││
+│  │  │ - SUMOMO_TMUX_SESSION が設定されている場合のみ承認フロー      │ ││
+│  │  │ - Slack承認 → tmux send-keys で Claude に応答                │ ││
 │  │  └──────────────────────────────────────────────────────────────┘ ││
-│  │  ┌──────────────────────────────────────────────────────────────┐ ││
-│  │  │ MCP: ask-human                                               │ ││
-│  │  │ - 判断が必要な時 → Slackで質問                               │ ││
-│  │  │ - 回答を受けて続行                                           │ ││
-│  │  └──────────────────────────────────────────────────────────────┘ ││
-│  └────────────────────────────────────────────────────────────────────┘│
+│  └───────────────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────────────────┘
             │
             │ 処理完了
@@ -61,7 +84,7 @@ GitHub Issue や Slack メンションをトリガーに、ローカル環境の
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  GitHub                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │ PR作成、Issueコメント                                            │   │
+│  │ 自動コミット → プッシュ → PR作成 → Issueコメント              │   │
 │  └─────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -72,9 +95,9 @@ GitHub Issue や Slack メンションをトリガーに、ローカル環境の
 
 | 機能 | トリガー | 動作 |
 |------|---------|------|
-| **Issue自動対応** | GitHub Issue に `@sumomo` | Issue内容を読み取り、コード修正、PR作成 |
+| **Issue自動対応** | GitHub Issue に `[sumomo]` タグ | worktreeで作業、コード修正、PR作成 |
 | **Slack指示** | Slack で `@sumomo` | 指示に従ってタスク実行 |
-| **実行承認** | 危険なコマンド実行時 | Slackで許可/拒否ボタン表示 |
+| **実行承認** | 危険なコマンド実行時 | Slackモーダルで許可/拒否（コメント可） |
 | **質問回答** | sumomoが判断を求める時 | Slackで選択肢または自由入力 |
 | **進捗通知** | 処理開始・完了時 | Slackスレッドで状況報告 |
 
@@ -86,33 +109,87 @@ GitHub Issue や Slack メンションをトリガーに、ローカル環境の
 
 ```
 src/
-├── index.ts          # エントリーポイント
+├── index.ts           # エントリーポイント、タスク処理
+├── config.ts          # 設定読み込み
+├── types/
+│   └── index.ts       # 型定義
 ├── slack/
-│   ├── bot.ts        # Slack Bot (Socket Mode)
-│   └── handlers.ts   # メンション・ボタン処理
+│   ├── bot.ts         # Slack Bot (Socket Mode)
+│   └── handlers.ts    # メンション・モーダル・ボタン処理
 ├── github/
-│   └── poller.ts     # Issue監視 (5分間隔)
+│   └── poller.ts      # Issue監視 (5分間隔)
 ├── approval/
-│   └── server.ts     # 承認サーバー (Express)
+│   └── server.ts      # 承認サーバー (Express)
 ├── claude/
-│   └── runner.ts     # Claude CLI 実行
-└── queue/
-    └── taskQueue.ts  # タスク管理
+│   └── runner.ts      # Claude CLI 実行
+├── queue/
+│   └── taskQueue.ts   # タスク管理
+├── git/
+│   └── worktree.ts    # Git worktree 管理
+└── tmux/
+    └── session.ts     # tmux セッション管理
 ```
 
-### 2. PreToolUse Hook (実行承認)
+### 2. tmux セッション管理
 
-**設定 (.claude/settings.json)**
+**役割**
+- Claude CLI を対話モードで実行
+- ワークスペース信頼確認プロンプトを自動承認
+- 権限要求に対して tmux send-keys で応答
+
+**主要関数**
+```typescript
+// セッション作成（Claude CLI起動）
+CreateTmuxSession(sessionName, workingDirectory, issueNumber, prompt)
+
+// 許可を送信（Enter / Tab+コメント+Enter）
+SendApproval(sessionName, comment?)
+
+// 拒否を送信（Down Down + Enter / Tab+コメント+Enter）
+SendDenial(sessionName, comment?)
+
+// 出力をキャプチャ
+CapturePane(sessionName, lines)
+
+// Claude終了検出
+IsClaudeFinished(output)
+```
+
+### 3. Git worktree 管理
+
+**役割**
+- Issue毎に独立した作業ディレクトリを作成
+- メインブランチに影響を与えずに作業
+- 自動コミット・プッシュ・PR作成
+
+**主要関数**
+```typescript
+// worktree作成
+CreateWorktree(repoPath, owner, repo, issueNumber)
+// → .worktrees/issue-{N}/ に sumomo/issue-{N} ブランチで作成
+
+// コミット＆プッシュ
+CommitAndPush(worktreeInfo, message)
+
+// PR作成
+CreatePullRequest(worktreeInfo, title, body)
+
+// worktree削除
+RemoveWorktree(owner, repo, issueNumber)
+```
+
+### 4. PreToolUse Hook (実行承認)
+
+**設定 (~/.claude/settings.json)**
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit",
+        "matcher": "tool == \"Edit\" || tool == \"Write\" || tool == \"Bash\"",
         "hooks": [{
           "type": "command",
-          "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/slack-approval.py",
-          "timeout": 320000
+          "command": "~/.claude/hooks/slack-approval.py"
         }]
       }
     ]
@@ -122,32 +199,35 @@ src/
 
 **承認フロー**
 ```
-コマンド実行 → Hook起動 → Slack通知 → ボタン待機 → JSON出力
-                                                      │
-                         ┌────────────────────────────┴────────┐
-                         ▼                                     ▼
-              permissionDecision: "allow"         permissionDecision: "deny"
-                    実行継続                              ブロック
-```
-
-### 3. MCP: ask-human (質問機能)
-
-```
-mcp-servers/
-└── ask-human/
-    └── src/
-        └── index.ts      # MCPサーバー実装
-```
-
-**使用例**
-```
-sumomo: 「認証方式をJWTにしますか？セッションにしますか？」
-         ↓
-Slack: [JWT] [セッション] [両方サポート]
-         ↓
-ユーザー: [JWT] をクリック
-         ↓
-sumomo: JWTで実装を継続
+Claude CLI がツール実行
+       │
+       ▼
+PreToolUse Hook 起動
+       │
+       ├─ SUMOMO_TMUX_SESSION 未設定 → 自動許可（通常のClaude使用）
+       │
+       └─ SUMOMO_TMUX_SESSION 設定済み
+              │
+              ▼
+       承認サーバーに問い合わせ
+              │
+              ▼
+       Slackにモーダル表示
+       [許可] [拒否] + コメント入力欄
+              │
+              ▼
+       ユーザー応答待機
+              │
+       ┌──────┴──────┐
+       ▼             ▼
+    [許可]         [拒否]
+       │             │
+       ▼             ▼
+tmux send-keys   tmux send-keys
+    Enter         Down Down Enter
+       │             │
+       ▼             ▼
+   実行継続       ブロック
 ```
 
 ---
@@ -158,30 +238,41 @@ sumomo: JWTで実装を継続
 
 ```
 1. GitHub Issue 作成
-   └─ 本文に @sumomo を含む
+   └─ タイトルまたは本文に [sumomo] を含む
 
 2. sumomo Bot が検知 (5分間隔ポーリング)
 
-3. Slack に通知
-   └─ 「🍑 Issue #42 の対応を開始します」
+3. Slack にスレッド作成
+   └─ 「🍑 GitHub Issue 処理開始」
+   └─ Issue リンク表示
 
-4. Claude CLI 起動
-   └─ Issue内容をプロンプトとして渡す
+4. worktree 作成
+   └─ .worktrees/issue-{N}/ ディレクトリ
+   └─ sumomo/issue-{N} ブランチ
 
-5. Claude がコード分析・修正
+5. tmux セッション作成
+   └─ Claude CLI を対話モードで起動
+   └─ ワークスペース信頼確認を自動承認
+
+6. Claude がコード分析・修正
    │
-   ├─ 危険なコマンド実行時
+   ├─ Edit/Write/Bash 実行時
    │   └─ PreToolUse Hook → Slack承認待ち
+   │       └─ 承認後 tmux send-keys で応答
    │
-   └─ 判断が必要な時
-       └─ ask-human MCP → Slackで質問
+   └─ 進捗をSlackスレッドに投稿
 
-6. PR作成
-   └─ git push & gh pr create
+7. 作業完了
+   ├─ 変更をコミット・プッシュ
+   └─ PR 自動作成
 
-7. 完了通知
-   ├─ Slack: 「🍑 PR作成しました: https://...」
+8. 完了通知
+   ├─ Slack スレッド: 「🍑 完了しました PR: https://...」
    └─ GitHub Issue: コメント追加
+
+9. クリーンアップ
+   ├─ tmux セッション終了
+   └─ worktree 削除
 ```
 
 ### Slack 指示フロー
@@ -194,7 +285,8 @@ sumomo: JWTで実装を継続
    └─ 「🍑 処理を開始します...」
 
 3. Claude CLI 実行
-   └─ (承認・質問は同様)
+   └─ カレントディレクトリで直接実行
+   └─ 出力をスレッドに投稿
 
 4. スレッドで結果報告
    └─ 「🍑 完了しました。変更内容: ...」
@@ -213,7 +305,7 @@ sumomo: JWTで実装を継続
 | Write | すべて | ファイル作成 |
 | Edit | すべて | ファイル編集 |
 
-※ 設定でカスタマイズ可能
+※ sumomo のtmuxセッション内でのみ承認フローが発動
 
 ---
 
@@ -224,7 +316,11 @@ sumomo: JWTで実装を継続
 | `ANTHROPIC_API_KEY` | Claude API | Anthropic Console |
 | `SLACK_BOT_TOKEN` | Slack API | Slack App設定 (xoxb-...) |
 | `SLACK_APP_TOKEN` | Socket Mode | Slack App設定 (xapp-...) |
+| `SLACK_CHANNEL_ID` | 通知先チャンネル | Slack チャンネル情報 |
 | `GITHUB_TOKEN` | GitHub API | GitHub Settings > Developer settings |
+| `GITHUB_OWNER` | リポジトリオーナー | GitHub リポジトリURL |
+| `GITHUB_REPO` | リポジトリ名 | GitHub リポジトリURL |
+| `APPROVAL_SERVER_PORT` | 承認サーバー | デフォルト: 3001 |
 
 ---
 
@@ -235,33 +331,13 @@ sumomo: JWTで実装を継続
 | App Name | sumomo |
 | Socket Mode | ON |
 | Event Subscriptions | `app_mention`, `message.channels` |
-| Interactivity | ON |
+| Interactivity & Shortcuts | ON |
 | Bot Token Scopes | `app_mentions:read`, `chat:write`, `channels:history` |
 
----
-
-## 拡張: Jenkins Agent 分散 (オプション)
-
-複数PCで並列処理したい場合：
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Jenkins Master                                                  │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │  sumomo Bot (GitHub監視 + Slack)                         │    │
-│  │  ↓ タスク発生                                           │    │
-│  │  process-issue ジョブを非同期で起動                      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-                    │
-      ┌─────────────┼─────────────┐
-      ▼             ▼             ▼
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│ Agent A  │  │ Agent B  │  │ Agent C  │
-│ (PC-A)   │  │ (PC-B)   │  │ (PC-C)   │
-│ Unity環境 │  │ Unity環境 │  │ Unity環境 │
-└──────────┘  └──────────┘  └──────────┘
-```
+**必要なスコープ**
+- `app_mentions:read` - メンション検知
+- `chat:write` - メッセージ投稿
+- `channels:history` - メッセージ履歴取得
 
 ---
 
@@ -272,18 +348,29 @@ sumomo/
 ├── docs/
 │   └── DESIGN.md              # 本設計書
 ├── src/                       # 統合Botソース
-│   ├── index.ts
+│   ├── index.ts               # エントリーポイント
+│   ├── config.ts              # 設定
+│   ├── types/
+│   │   └── index.ts           # 型定義
 │   ├── slack/
+│   │   ├── bot.ts             # Slack Bot
+│   │   └── handlers.ts        # イベントハンドラー
 │   ├── github/
+│   │   └── poller.ts          # Issue監視
 │   ├── approval/
+│   │   └── server.ts          # 承認サーバー
 │   ├── claude/
-│   └── queue/
-├── mcp-servers/
-│   └── ask-human/             # 質問MCP
+│   │   └── runner.ts          # Claude CLI実行
+│   ├── queue/
+│   │   └── taskQueue.ts       # タスクキュー
+│   ├── git/
+│   │   └── worktree.ts        # worktree管理
+│   └── tmux/
+│       └── session.ts         # tmuxセッション管理
 ├── .claude/
-│   ├── settings.json          # Hook設定
 │   └── hooks/
 │       └── slack-approval.py  # 承認スクリプト
+├── .worktrees/                # Issue作業用ディレクトリ（自動生成）
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -301,47 +388,76 @@ npm install
 export ANTHROPIC_API_KEY="sk-..."
 export SLACK_BOT_TOKEN="xoxb-..."
 export SLACK_APP_TOKEN="xapp-..."
+export SLACK_CHANNEL_ID="C0123456789"
 export GITHUB_TOKEN="ghp_..."
-export SLACK_CHANNEL_ID="#sumomo-notifications"
+export GITHUB_OWNER="your-org"
+export GITHUB_REPO="your-repo"
+export APPROVAL_SERVER_PORT="3001"
 
-# 3. 起動
+# 3. ビルド
+npm run build
+
+# 4. 起動
 npm start
-
-# または常駐化 (macOS)
-launchctl load ~/Library/LaunchAgents/com.sumomo.plist
 ```
 
 ---
 
 ## Slack表示イメージ
 
-### 通常の指示
+### Issue処理開始（スレッド親メッセージ）
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ #development                                                │
-├─────────────────────────────────────────────────────────────┤
-│ 佐藤: @sumomo このIssueを対応して                           │
-│       https://github.com/our-org/app/issues/42              │
+│ 🍑 GitHub Issue 処理開始                                    │
 │                                                             │
-│ └─ sumomo: 🍑 処理を開始します...                           │
-│    └─ sumomo: 🍑 完了しました                               │
-│       PRを作成しました: https://github.com/.../pull/123     │
+│ #42: ログイン画面のバグを修正                               │
+│ your-org/your-repo                                          │
+│                                                             │
+│ 処理の進捗はこのスレッドに投稿されます                      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 承認リクエスト
+### 進捗通知（スレッド内）
+
+```
+└─ 🍑 worktree を作成中...
+└─ 🍑 ブランチ `sumomo/issue-42` で作業を開始します
+└─ 🍑 Claude を起動中...
+└─ 🍑 ```
+   // コード修正中の出力...
+   ```
+└─ 🍑 コミット＆プッシュ中...
+└─ 🍑 PR を作成中...
+└─ 🍑 完了しました
+   PR: https://github.com/your-org/your-repo/pull/123
+```
+
+### 承認モーダル
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 🍑 sumomo 実行許可リクエスト                                │
+│ 実行を許可                                          [×]     │
+├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│ ツール: Bash                    Issue: #42                  │
+│ ツール: Edit                                                │
+│ コマンド:                                                   │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ Edit: src/login.ts                                      │ │
+│ │                                                         │ │
+│ │ Old:                                                    │ │
+│ │ const isValid = false;                                  │ │
+│ │                                                         │ │
+│ │ New:                                                    │ │
+│ │ const isValid = validateInput(input);                   │ │
+│ └─────────────────────────────────────────────────────────┘ │
 │                                                             │
-│ 詳細:                                                       │
-│ コマンド: `git push origin fix/issue-42`                    │
+│ コメント                                                    │
+│ ┌─────────────────────────────────────────────────────────┐ │
+│ │ コメントがあれば入力してください（任意）                │ │
+│ └─────────────────────────────────────────────────────────┘ │
 │                                                             │
-│ [✅ 許可]  [❌ 拒否]  [👀 詳細確認]                          │
+│                           [キャンセル]  [許可する]          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -350,7 +466,6 @@ launchctl load ~/Library/LaunchAgents/com.sumomo.plist
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ 🍑 sumomo からの質問                                        │
-│ Issue: #42 ログイン機能の修正                               │
 │                                                             │
 │ 認証方式について確認させてください。                        │
 │ 現在JWT認証を使用していますが、セッション認証に             │
