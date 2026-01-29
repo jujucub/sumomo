@@ -35,21 +35,13 @@ import {
   ClearCurrentTaskId,
 } from './approval/server.js';
 import {
-  CreateWorktree,
-  RemoveWorktree,
   CommitAndPush,
   CreatePullRequest,
   CleanupAllWorktrees,
-  type WorktreeInfo,
+  GetOrCreateWorktree,
+  RemoveWorktree,
 } from './git/worktree.js';
-import {
-  CreateTmuxSession,
-  KillSession,
-  CapturePane,
-  IsClaudeFinished,
-  CleanupAllSessions,
-  GetSessionNameForIssue,
-} from './tmux/session.js';
+import { CleanupAllSessions } from './tmux/session.js';
 
 // アプリケーション状態
 let _isRunning = false;
@@ -82,7 +74,7 @@ async function Start(): Promise<void> {
 
   // GitHub Poller を初期化・開始
   InitGitHubPoller(_config);
-  StartGitHubPoller(_config, HandleGitHubIssue);
+  StartGitHubPoller(_config, HandleGitHubIssue, HandleIssueClosed);
 
   // タスクキューのイベントを監視
   _taskQueue.On('added', OnTaskAdded);
@@ -155,10 +147,44 @@ async function HandleGitHubIssue(
     slackThreadTs: threadTs,
   };
 
+  // スレッドとIssueを紐付け（スレッドでの追加メンション用）
+  const sessionStore = GetSessionStore();
+  sessionStore.LinkThreadToIssue(threadTs, metadata.owner, metadata.repo, metadata.issueNumber);
+
   // タスクをキューに追加
   const task = _taskQueue.AddTask('github', prompt, metadataWithThread);
 
   console.log(`Task added from GitHub: ${task.id} (thread: ${threadTs})`);
+}
+
+/**
+ * GitHub Issue がクローズされたときの処理
+ */
+async function HandleIssueClosed(
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<void> {
+  console.log(`Issue closed: ${owner}/${repo}#${issueNumber}`);
+
+  const sessionStore = GetSessionStore();
+
+  // スレッドとIssueの紐付けを解除
+  sessionStore.UnlinkThreadForIssue(owner, repo, issueNumber);
+
+  // セッションを削除
+  const hadSession = sessionStore.DeleteForIssue(owner, repo, issueNumber);
+  if (hadSession) {
+    console.log(`Session deleted for issue #${issueNumber}`);
+  }
+
+  // worktree を削除
+  try {
+    await RemoveWorktree(owner, repo, issueNumber);
+    console.log(`Worktree removed for issue #${issueNumber}`);
+  } catch (error) {
+    console.error(`Failed to remove worktree for issue #${issueNumber}:`, error);
+  }
 }
 
 /**
@@ -193,71 +219,81 @@ async function ProcessNextTask(): Promise<void> {
       // GitHub Issue の場合は worktree で処理
       result = await ProcessGitHubTask(task);
     } else {
-      // Slack の場合は通常の処理（出力をスレッドに投稿）
+      // Slack の場合
       const slackApp = GetSlackBot();
       const slackMeta = task.metadata;
       const sessionStore = GetSessionStore();
 
-      // 同じスレッドの既存セッションを取得
-      const existingSessionId = sessionStore.Get(slackMeta.threadTs, slackMeta.userId);
-      if (existingSessionId) {
-        console.log(`Resuming existing session for thread ${slackMeta.threadTs}: ${existingSessionId}`);
+      // Issue用スレッドかどうかをチェック
+      const linkedIssue = sessionStore.GetIssueForThread(slackMeta.threadTs);
+
+      if (linkedIssue) {
+        // Issue用スレッドの場合: Issueのセッションとworktreeを使用
+        console.log(`Thread ${slackMeta.threadTs} is linked to issue #${linkedIssue.issueNumber}`);
+        result = await ProcessSlackAsIssueTask(task, linkedIssue);
       } else {
-        console.log(`Creating new session for thread ${slackMeta.threadTs}`);
-      }
+        // 通常のSlackタスク
+        // 同じスレッドの既存セッションを取得
+        const existingSessionId = sessionStore.Get(slackMeta.threadTs, slackMeta.userId);
+        if (existingSessionId) {
+          console.log(`Resuming existing session for thread ${slackMeta.threadTs}: ${existingSessionId}`);
+        } else {
+          console.log(`Creating new session for thread ${slackMeta.threadTs}`);
+        }
 
-      let lastPostTime = 0;
-      let outputBuffer = '';
-      const postInterval = 3000;
+        let lastPostTime = 0;
+        let outputBuffer = '';
+        const postInterval = 3000;
 
-      const onOutput = async (chunk: string, _type: 'stdout' | 'stderr') => {
-        outputBuffer += chunk;
-        const now = Date.now();
+        const onOutput = async (chunk: string, _type: 'stdout' | 'stderr') => {
+          outputBuffer += chunk;
+          const now = Date.now();
 
-        if (now - lastPostTime >= postInterval && outputBuffer.trim()) {
-          lastPostTime = now;
-          const message = outputBuffer.slice(0, 1500);
-          outputBuffer = '';
+          if (now - lastPostTime >= postInterval && outputBuffer.trim()) {
+            lastPostTime = now;
+            const message = outputBuffer.slice(0, 1500);
+            outputBuffer = '';
 
+            try {
+              await NotifyProgress(
+                slackApp,
+                _config!.slackChannelId,
+                `\`\`\`\n${message}\n\`\`\``,
+                slackMeta.threadTs
+              );
+            } catch (e) {
+              console.error('Failed to post to Slack:', e);
+            }
+          }
+        };
+
+        const runResult = await _claudeRunner.Run(task.id, task.prompt, {
+          workingDirectory: process.cwd(),
+          onOutput,
+          resumeSessionId: existingSessionId,
+        });
+
+        // 新しいセッションIDが返された場合は保存
+        if (runResult.sessionId) {
+          sessionStore.Set(slackMeta.threadTs, slackMeta.userId, runResult.sessionId);
+          console.log(`Session saved for thread ${slackMeta.threadTs}: ${runResult.sessionId}`);
+        }
+
+        // 残りのバッファを投稿
+        if (outputBuffer.trim()) {
           try {
             await NotifyProgress(
               slackApp,
               _config!.slackChannelId,
-              `\`\`\`\n${message}\n\`\`\``,
+              `\`\`\`\n${outputBuffer.slice(0, 1500)}\n\`\`\``,
               slackMeta.threadTs
             );
           } catch (e) {
-            console.error('Failed to post to Slack:', e);
+            console.error('Failed to post final output to Slack:', e);
           }
         }
-      };
 
-      const runResult = await _claudeRunner.Run(task.id, task.prompt, {
-        workingDirectory: process.cwd(),
-        onOutput,
-        resumeSessionId: existingSessionId,
-      });
-
-      // 新しいセッションIDが返された場合は保存
-      if (runResult.sessionId) {
-        sessionStore.Set(slackMeta.threadTs, slackMeta.userId, runResult.sessionId);
-        console.log(`Session saved for thread ${slackMeta.threadTs}: ${runResult.sessionId}`);
-      }
-
-      result = runResult;
-
-      // 残りのバッファを投稿
-      if (outputBuffer.trim()) {
-        try {
-          await NotifyProgress(
-            slackApp,
-            _config!.slackChannelId,
-            `\`\`\`\n${outputBuffer.slice(0, 1500)}\n\`\`\``,
-            slackMeta.threadTs
-          );
-        } catch (e) {
-          console.error('Failed to post final output to Slack:', e);
-        }
+        result = runResult;
       }
     }
 
@@ -294,39 +330,193 @@ async function ProcessNextTask(): Promise<void> {
 }
 
 /**
- * GitHub Issue タスクを tmux + worktree で処理する
+ * Issue用スレッドでのSlackメンションをIssueとして処理する
+ */
+async function ProcessSlackAsIssueTask(
+  task: Task,
+  issueInfo: { owner: string; repo: string; issueNumber: number }
+): Promise<{ success: boolean; output: string; prUrl?: string; error?: string }> {
+  if (!_config || !_claudeRunner) {
+    return { success: false, output: '', error: 'Not initialized' };
+  }
+
+  const slackMeta = task.metadata as SlackTaskMetadata;
+  const slackApp = GetSlackBot();
+  const sessionStore = GetSessionStore();
+
+  try {
+    // 既存の worktree を取得（なければ作成）
+    const { worktreeInfo, isExisting } = await GetOrCreateWorktree(
+      process.cwd(),
+      issueInfo.owner,
+      issueInfo.repo,
+      issueInfo.issueNumber
+    );
+
+    if (isExisting) {
+      await NotifyProgress(
+        slackApp,
+        _config.slackChannelId,
+        `Issue #${issueInfo.issueNumber} の作業を継続します`,
+        slackMeta.threadTs
+      );
+    }
+
+    // Issueのセッションを取得
+    const existingSessionId = sessionStore.GetForIssue(
+      issueInfo.owner,
+      issueInfo.repo,
+      issueInfo.issueNumber
+    );
+    if (existingSessionId) {
+      console.log(`Resuming issue session: ${existingSessionId}`);
+    } else {
+      console.log(`Creating new session for issue #${issueInfo.issueNumber}`);
+    }
+
+    // 出力コールバック
+    let lastPostTime = 0;
+    let outputBuffer = '';
+    const postInterval = 3000;
+
+    const onOutput = async (chunk: string, _type: 'stdout' | 'stderr') => {
+      outputBuffer += chunk;
+      const now = Date.now();
+
+      if (now - lastPostTime >= postInterval && outputBuffer.trim()) {
+        lastPostTime = now;
+        const message = outputBuffer.slice(0, 1500);
+        outputBuffer = '';
+
+        try {
+          await NotifyProgress(
+            slackApp,
+            _config!.slackChannelId,
+            `\`\`\`\n${message}\n\`\`\``,
+            slackMeta.threadTs
+          );
+        } catch (e) {
+          console.error('Failed to post to Slack:', e);
+        }
+      }
+    };
+
+    // Claude CLI を実行
+    const runResult = await _claudeRunner.Run(task.id, task.prompt, {
+      workingDirectory: worktreeInfo.worktreePath,
+      onOutput,
+      resumeSessionId: existingSessionId,
+    });
+
+    // セッションIDを保存
+    if (runResult.sessionId) {
+      sessionStore.SetForIssue(
+        issueInfo.owner,
+        issueInfo.repo,
+        issueInfo.issueNumber,
+        runResult.sessionId
+      );
+      console.log(`Session saved for issue #${issueInfo.issueNumber}: ${runResult.sessionId}`);
+    }
+
+    // 残りのバッファを投稿
+    if (outputBuffer.trim()) {
+      try {
+        await NotifyProgress(
+          slackApp,
+          _config.slackChannelId,
+          `\`\`\`\n${outputBuffer.slice(0, 1500)}\n\`\`\``,
+          slackMeta.threadTs
+        );
+      } catch (e) {
+        console.error('Failed to post final output to Slack:', e);
+      }
+    }
+
+    // 変更があればコミット＆プッシュ
+    const commitMessage = `fix: Issue #${issueInfo.issueNumber} - additional changes`;
+    const hasChanges = await CommitAndPush(worktreeInfo, commitMessage);
+
+    if (hasChanges) {
+      await NotifyProgress(
+        slackApp,
+        _config.slackChannelId,
+        '変更をコミット＆プッシュしました',
+        slackMeta.threadTs
+      );
+    }
+
+    return {
+      success: runResult.success,
+      output: runResult.output,
+      error: runResult.error,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`ProcessSlackAsIssueTask error: ${errorMessage}`);
+    return {
+      success: false,
+      output: '',
+      error: errorMessage,
+    };
+  }
+}
+
+/**
+ * GitHub Issue タスクを worktree で処理する（セッション継続対応）
  */
 async function ProcessGitHubTask(
   task: Task
 ): Promise<{ success: boolean; output: string; prUrl?: string; error?: string }> {
-  if (!_config) {
+  if (!_config || !_claudeRunner) {
     return { success: false, output: '', error: 'Not initialized' };
   }
 
   const meta = task.metadata as GitHubTaskMetadata;
   const slackApp = GetSlackBot();
   const threadTs = meta.slackThreadTs;
-  let worktreeInfo: WorktreeInfo | undefined;
-  let sessionName: string | undefined;
+  const sessionStore = GetSessionStore();
 
   try {
-    // worktree を作成
-    console.log(`Creating worktree for issue #${meta.issueNumber}...`);
-    await NotifyProgress(slackApp, _config.slackChannelId, 'worktree を作成中...', threadTs);
+    // 既存の worktree があれば再利用、なければ新規作成
+    console.log(`Getting or creating worktree for issue #${meta.issueNumber}...`);
 
-    worktreeInfo = await CreateWorktree(
+    const { worktreeInfo, isExisting } = await GetOrCreateWorktree(
       process.cwd(),
       meta.owner,
       meta.repo,
       meta.issueNumber
     );
 
-    await NotifyProgress(
-      slackApp,
-      _config.slackChannelId,
-      `ブランチ \`${worktreeInfo.branchName}\` で作業を開始します`,
-      threadTs
-    );
+    if (isExisting) {
+      await NotifyProgress(
+        slackApp,
+        _config.slackChannelId,
+        `既存のブランチ \`${worktreeInfo.branchName}\` で作業を継続します`,
+        threadTs
+      );
+    } else {
+      await NotifyProgress(
+        slackApp,
+        _config.slackChannelId,
+        `ブランチ \`${worktreeInfo.branchName}\` で作業を開始します`,
+        threadTs
+      );
+    }
+
+    // 同じIssueの既存セッションを取得
+    const existingSessionId = sessionStore.GetForIssue(meta.owner, meta.repo, meta.issueNumber);
+    if (existingSessionId) {
+      console.log(`Resuming existing session for issue #${meta.issueNumber}: ${existingSessionId}`);
+      await NotifyProgress(
+        slackApp,
+        _config.slackChannelId,
+        '前回のセッションを継続します',
+        threadTs
+      );
+    } else {
+      console.log(`Creating new session for issue #${meta.issueNumber}`);
+    }
 
     // Claude 用のプロンプトを構築
     const worktreePrompt = `${task.prompt}
@@ -339,80 +529,67 @@ async function ProcessGitHubTask(
 - コミットやPR作成は不要です（システムが自動で行います）
 - 修正が完了したら、変更内容の概要を報告してください`;
 
-    // tmuxセッションを作成してClaude CLIを起動
-    sessionName = GetSessionNameForIssue(meta.owner, meta.repo, meta.issueNumber);
     await NotifyProgress(slackApp, _config.slackChannelId, 'Claude を起動中...', threadTs);
 
-    await CreateTmuxSession(
-      sessionName,
-      worktreeInfo.worktreePath,
-      meta.issueNumber,
-      worktreePrompt
-    );
-
-    // セッションの出力を監視
-    let lastOutput = '';
+    // 出力を Slack に投稿するコールバック
     let lastPostTime = 0;
-    const postInterval = 5000; // 5秒ごとに投稿
+    let outputBuffer = '';
+    const postInterval = 3000;
 
-    const result = await new Promise<{ success: boolean; output: string }>((resolve) => {
-      const checkInterval = setInterval(async () => {
-        const currentOutput = CapturePane(sessionName!, 500);
+    const onOutput = async (chunk: string, _type: 'stdout' | 'stderr') => {
+      outputBuffer += chunk;
+      const now = Date.now();
 
-        // 新しい出力があればSlackに投稿
-        if (currentOutput !== lastOutput) {
-          const newContent = currentOutput.slice(lastOutput.length);
-          lastOutput = currentOutput;
+      if (now - lastPostTime >= postInterval && outputBuffer.trim()) {
+        lastPostTime = now;
+        const message = outputBuffer.slice(0, 1500);
+        outputBuffer = '';
 
-          const now = Date.now();
-          if (now - lastPostTime >= postInterval && newContent.trim()) {
-            lastPostTime = now;
-            try {
-              // 最後の50行だけ投稿
-              const lines = newContent.split('\n').slice(-50).join('\n');
-              if (lines.trim()) {
-                await NotifyProgress(
-                  slackApp,
-                  _config!.slackChannelId,
-                  `\`\`\`\n${lines.slice(0, 1500)}\n\`\`\``,
-                  threadTs
-                );
-              }
-            } catch (e) {
-              console.error('Failed to post to Slack:', e);
-            }
-          }
+        try {
+          await NotifyProgress(
+            slackApp,
+            _config!.slackChannelId,
+            `\`\`\`\n${message}\n\`\`\``,
+            threadTs
+          );
+        } catch (e) {
+          console.error('Failed to post to Slack:', e);
         }
+      }
+    };
 
-        // Claude CLIが終了したかチェック
-        if (IsClaudeFinished(currentOutput)) {
-          clearInterval(checkInterval);
-          resolve({
-            success: true,
-            output: currentOutput,
-          });
-        }
-      }, 2000); // 2秒ごとにチェック
-
-      // タイムアウト（10分）
-      setTimeout(() => {
-        clearInterval(checkInterval);
-        resolve({
-          success: false,
-          output: CapturePane(sessionName!, 500),
-        });
-      }, 600000);
+    // Claude CLI を実行（非対話モード + セッション継続）
+    const runResult = await _claudeRunner.Run(task.id, worktreePrompt, {
+      workingDirectory: worktreeInfo.worktreePath,
+      onOutput,
+      resumeSessionId: existingSessionId,
     });
 
-    // セッションを終了
-    KillSession(sessionName);
-    sessionName = undefined;
+    // 新しいセッションIDが返された場合は保存
+    if (runResult.sessionId) {
+      sessionStore.SetForIssue(meta.owner, meta.repo, meta.issueNumber, runResult.sessionId);
+      console.log(`Session saved for issue #${meta.issueNumber}: ${runResult.sessionId}`);
+    }
 
-    if (!result.success) {
+    // 残りのバッファを投稿
+    if (outputBuffer.trim()) {
+      try {
+        await NotifyProgress(
+          slackApp,
+          _config.slackChannelId,
+          `\`\`\`\n${outputBuffer.slice(0, 1500)}\n\`\`\``,
+          threadTs
+        );
+      } catch (e) {
+        console.error('Failed to post final output to Slack:', e);
+      }
+    }
+
+    if (!runResult.success) {
       return {
         success: false,
-        output: result.output,
-        error: 'Claude CLI timed out',
+        output: runResult.output,
+        error: runResult.error ?? 'Claude CLI failed',
       };
     }
 
@@ -425,7 +602,7 @@ async function ProcessGitHubTask(
     if (!hasChanges) {
       return {
         success: true,
-        output: result.output + '\n\n（変更なし - PRは作成されませんでした）',
+        output: runResult.output + '\n\n（変更なし - PRは作成されませんでした）',
       };
     }
 
@@ -437,7 +614,7 @@ async function ProcessGitHubTask(
 Issue #${meta.issueNumber} に対応しました。
 
 ## 変更内容
-${result.output.slice(0, 1000)}
+${runResult.output.slice(0, 1000)}
 
 ---
 🍑 Generated by sumomo`;
@@ -446,19 +623,19 @@ ${result.output.slice(0, 1000)}
 
     return {
       success: true,
-      output: result.output,
+      output: runResult.output,
       prUrl,
     };
-  } finally {
-    // セッションを終了
-    if (sessionName) {
-      KillSession(sessionName);
-    }
-    // worktree を削除
-    if (worktreeInfo) {
-      await RemoveWorktree(meta.owner, meta.repo, meta.issueNumber);
-    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`ProcessGitHubTask error: ${errorMessage}`);
+    return {
+      success: false,
+      output: '',
+      error: errorMessage,
+    };
   }
+  // 注意: worktreeは削除せずに維持（セッション継続のため）
 }
 
 /**

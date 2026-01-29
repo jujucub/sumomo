@@ -1,6 +1,6 @@
 /**
  * sumomo - セッションストア
- * Slackスレッドとユーザーに紐づくClaudeセッションIDを管理する
+ * Slackスレッド/GitHub IssueとClaudeセッションIDを管理する
  */
 
 // セッション情報
@@ -10,33 +10,50 @@ interface SessionInfo {
   lastUsedAt: Date;
 }
 
-// セッションキー（スレッドID + ユーザーID）
-type SessionKey = `${string}:${string}`; // threadTs:userId
+// Issue情報（スレッドとIssueの紐付け用）
+interface IssueInfo {
+  readonly owner: string;
+  readonly repo: string;
+  readonly issueNumber: number;
+}
+
+// セッションキー
+// Slack: slack:{threadTs}:{userId}
+// GitHub: github:{owner}/{repo}#{issueNumber}
+type SessionKey = string;
 
 /**
  * セッションストアクラス
  */
 class SessionStore {
   private _sessions: Map<SessionKey, SessionInfo>;
+  private _threadToIssue: Map<string, IssueInfo>; // threadTs -> IssueInfo
   private readonly _maxAge: number; // セッションの最大有効期間（ミリ秒）
 
   constructor(maxAgeHours: number = 24) {
     this._sessions = new Map();
+    this._threadToIssue = new Map();
     this._maxAge = maxAgeHours * 60 * 60 * 1000;
   }
 
   /**
-   * セッションキーを生成
+   * Slackスレッド用のキーを生成
    */
-  private _makeKey(threadTs: string, userId: string): SessionKey {
-    return `${threadTs}:${userId}`;
+  private _makeSlackKey(threadTs: string, userId: string): SessionKey {
+    return `slack:${threadTs}:${userId}`;
   }
 
   /**
-   * セッションを取得
+   * GitHub Issue用のキーを生成
    */
-  Get(threadTs: string, userId: string): string | undefined {
-    const key = this._makeKey(threadTs, userId);
+  private _makeGitHubKey(owner: string, repo: string, issueNumber: number): SessionKey {
+    return `github:${owner}/${repo}#${issueNumber}`;
+  }
+
+  /**
+   * キーからセッションを取得（共通処理）
+   */
+  private _getByKey(key: SessionKey): string | undefined {
     const session = this._sessions.get(key);
 
     if (!session) {
@@ -56,27 +73,92 @@ class SessionStore {
   }
 
   /**
-   * セッションを保存
+   * キーにセッションを保存（共通処理）
    */
-  Set(threadTs: string, userId: string, sessionId: string): void {
-    const key = this._makeKey(threadTs, userId);
+  private _setByKey(key: SessionKey, sessionId: string): void {
     const now = new Date();
-
     this._sessions.set(key, {
       sessionId,
       createdAt: now,
       lastUsedAt: now,
     });
-
     console.log(`Session stored: ${key} -> ${sessionId}`);
   }
 
   /**
-   * セッションを削除
+   * Slackスレッドのセッションを取得
+   */
+  Get(threadTs: string, userId: string): string | undefined {
+    const key = this._makeSlackKey(threadTs, userId);
+    return this._getByKey(key);
+  }
+
+  /**
+   * Slackスレッドのセッションを保存
+   */
+  Set(threadTs: string, userId: string, sessionId: string): void {
+    const key = this._makeSlackKey(threadTs, userId);
+    this._setByKey(key, sessionId);
+  }
+
+  /**
+   * Slackスレッドのセッションを削除
    */
   Delete(threadTs: string, userId: string): boolean {
-    const key = this._makeKey(threadTs, userId);
+    const key = this._makeSlackKey(threadTs, userId);
     return this._sessions.delete(key);
+  }
+
+  /**
+   * GitHub Issueのセッションを取得
+   */
+  GetForIssue(owner: string, repo: string, issueNumber: number): string | undefined {
+    const key = this._makeGitHubKey(owner, repo, issueNumber);
+    return this._getByKey(key);
+  }
+
+  /**
+   * GitHub Issueのセッションを保存
+   */
+  SetForIssue(owner: string, repo: string, issueNumber: number, sessionId: string): void {
+    const key = this._makeGitHubKey(owner, repo, issueNumber);
+    this._setByKey(key, sessionId);
+  }
+
+  /**
+   * GitHub Issueのセッションを削除
+   */
+  DeleteForIssue(owner: string, repo: string, issueNumber: number): boolean {
+    const key = this._makeGitHubKey(owner, repo, issueNumber);
+    return this._sessions.delete(key);
+  }
+
+  /**
+   * SlackスレッドとGitHub Issueを紐付ける
+   */
+  LinkThreadToIssue(threadTs: string, owner: string, repo: string, issueNumber: number): void {
+    this._threadToIssue.set(threadTs, { owner, repo, issueNumber });
+    console.log(`Thread ${threadTs} linked to issue ${owner}/${repo}#${issueNumber}`);
+  }
+
+  /**
+   * SlackスレッドからGitHub Issue情報を取得
+   */
+  GetIssueForThread(threadTs: string): IssueInfo | undefined {
+    return this._threadToIssue.get(threadTs);
+  }
+
+  /**
+   * GitHub Issueに紐付いたスレッドの紐付けを解除
+   */
+  UnlinkThreadForIssue(owner: string, repo: string, issueNumber: number): void {
+    for (const [threadTs, info] of this._threadToIssue) {
+      if (info.owner === owner && info.repo === repo && info.issueNumber === issueNumber) {
+        this._threadToIssue.delete(threadTs);
+        console.log(`Thread ${threadTs} unlinked from issue ${owner}/${repo}#${issueNumber}`);
+        break;
+      }
+    }
   }
 
   /**

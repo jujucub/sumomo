@@ -49,12 +49,17 @@ export function InitGitHubPoller(config: Config): void {
   _allowedUsers = config.allowedUsers;
 }
 
+// Issueクローズ時のコールバック
+type OnIssueClosedCallback = (owner: string, repo: string, issueNumber: number) => Promise<void>;
+let _onIssueClosed: OnIssueClosedCallback | undefined;
+
 /**
  * GitHub Poller を開始する
  */
 export function StartGitHubPoller(
   config: Config,
-  onIssueFound: (metadata: GitHubTaskMetadata, prompt: string) => Promise<void>
+  onIssueFound: (metadata: GitHubTaskMetadata, prompt: string) => Promise<void>,
+  onIssueClosed?: OnIssueClosedCallback
 ): void {
   if (_state.isRunning) {
     console.log('GitHub Poller is already running');
@@ -66,6 +71,7 @@ export function StartGitHubPoller(
   }
 
   _state.isRunning = true;
+  _onIssueClosed = onIssueClosed;
   console.log(`GitHub Poller started (interval: ${config.githubPollInterval}ms)`);
 
   // 即座に最初のポーリングを実行
@@ -112,8 +118,57 @@ export async function PollIssues(
 
     try {
       await PollRepoIssues(owner, repo, onIssueFound);
+      // クローズされたIssueをチェック
+      await CheckClosedIssues(owner, repo);
     } catch (error) {
       console.error(`Error polling ${repoStr}:`, error);
+    }
+  }
+}
+
+/**
+ * 処理済みIssueがクローズされたかチェックする
+ */
+async function CheckClosedIssues(owner: string, repo: string): Promise<void> {
+  if (!_octokit || !_onIssueClosed) return;
+
+  // 処理済みIssueの中からこのリポジトリのものを抽出
+  const repoPrefix = `${owner}/${repo}#`;
+  const issueNumbers: number[] = [];
+
+  for (const issueKey of _processedIssues) {
+    if (issueKey.startsWith(repoPrefix)) {
+      const num = parseInt(issueKey.slice(repoPrefix.length), 10);
+      if (!isNaN(num)) {
+        issueNumbers.push(num);
+      }
+    }
+  }
+
+  // 各Issueのステータスをチェック
+  for (const issueNumber of issueNumbers) {
+    try {
+      const { data: issue } = await _octokit.issues.get({
+        owner,
+        repo,
+        issue_number: issueNumber,
+      });
+
+      if (issue.state === 'closed') {
+        const issueKey = `${owner}/${repo}#${issueNumber}`;
+        console.log(`Issue closed: ${issueKey}`);
+
+        // クローズコールバックを呼び出し
+        await _onIssueClosed(owner, repo, issueNumber);
+
+        // 処理済みリストから削除（次回検知しないため）
+        _processedIssues.delete(issueKey);
+      }
+    } catch (error) {
+      // Issueが見つからない場合（削除された等）も処理済みから削除
+      const issueKey = `${owner}/${repo}#${issueNumber}`;
+      console.error(`Error checking issue ${issueKey}:`, error);
+      _processedIssues.delete(issueKey);
     }
   }
 }

@@ -249,6 +249,28 @@ export function GetWorktreeInfo(
 }
 
 /**
+ * 既存の worktree があれば再利用し、なければ新規作成する
+ */
+export async function GetOrCreateWorktree(
+  baseDir: string,
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<{ worktreeInfo: WorktreeInfo; isExisting: boolean }> {
+  const worktreeKey = `${owner}/${repo}#${issueNumber}`;
+  const existing = _activeWorktrees.get(worktreeKey);
+
+  if (existing && fs.existsSync(existing.worktreePath)) {
+    console.log(`Reusing existing worktree: ${existing.worktreePath}`);
+    return { worktreeInfo: existing, isExisting: true };
+  }
+
+  // 既存がない場合は新規作成
+  const worktreeInfo = await CreateWorktree(baseDir, owner, repo, issueNumber);
+  return { worktreeInfo, isExisting: false };
+}
+
+/**
  * 全ての worktree をクリーンアップする
  */
 export async function CleanupAllWorktrees(): Promise<void> {
