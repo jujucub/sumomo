@@ -36,7 +36,6 @@ import {
 } from './approval/server.js';
 import {
   CommitAndPush,
-  CreatePullRequest,
   CleanupAllWorktrees,
   GetOrCreateWorktree,
   RemoveWorktree,
@@ -287,7 +286,15 @@ async function ProcessNextTask(): Promise<void> {
           }
         };
 
-        const runResult = await _claudeRunner.Run(task.id, task.prompt, {
+        // Slackコンテキストをプロンプトに追加
+        const promptWithContext = task.prompt + BuildSlackContext(
+          slackMeta.userId,
+          slackMeta.channelId,
+          slackMeta.threadTs,
+          _config.githubRepos
+        );
+
+        const runResult = await _claudeRunner.Run(task.id, promptWithContext, {
           workingDirectory: process.cwd(),
           onOutput,
           resumeSessionId: existingSessionId,
@@ -428,8 +435,14 @@ async function ProcessSlackAsIssueTask(
       }
     };
 
-    // Claude CLI を実行
-    const runResult = await _claudeRunner.Run(task.id, task.prompt, {
+    // Slackコンテキストをプロンプトに追加して Claude CLI を実行
+    const promptWithContext = task.prompt + BuildSlackContext(
+      slackMeta.userId,
+      slackMeta.channelId,
+      slackMeta.threadTs,
+      _config!.githubRepos
+    );
+    const runResult = await _claudeRunner.Run(task.id, promptWithContext, {
       workingDirectory: worktreeInfo.worktreePath,
       onOutput,
       resumeSessionId: existingSessionId,
@@ -549,16 +562,13 @@ async function ProcessGitHubTask(
       console.log(`Creating new session for issue #${meta.issueNumber}`);
     }
 
-    // Claude 用のプロンプトを構築
-    const worktreePrompt = `${task.prompt}
-
-作業ディレクトリ: ${worktreeInfo.worktreePath}
-ブランチ: ${worktreeInfo.branchName}
-
-注意事項:
-- コードの修正を行ってください
-- コミットやPR作成は不要です（システムが自動で行います）
-- 修正が完了したら、変更内容の概要を報告してください`;
+    // Claude 用のプロンプトを構築（GitHub情報とSlack情報を含む）
+    const worktreePrompt = task.prompt + BuildGitHubContext(
+      meta,
+      worktreeInfo.branchName,
+      _config.slackChannelId,
+      threadTs
+    );
 
     await NotifyProgress(slackApp, _config.slackChannelId, 'Claude を起動中なのでーす！', threadTs);
 
@@ -616,46 +626,12 @@ async function ProcessGitHubTask(
       }
     }
 
-    if (!runResult.success) {
-      return {
-        success: false,
-        output: runResult.output,
-        error: runResult.error ?? 'Claude CLI failed',
-      };
-    }
-
-    // 変更をコミット＆プッシュ
-    await NotifyProgress(slackApp, _config.slackChannelId, 'コミット＆プッシュするのでーす！', threadTs);
-
-    const commitMessage = `fix: Issue #${meta.issueNumber} - ${meta.issueTitle}`;
-    const hasChanges = await CommitAndPush(worktreeInfo, commitMessage);
-
-    if (!hasChanges) {
-      return {
-        success: true,
-        output: runResult.output + '\n\n（変更なしなのです - PRは作成されませんでした）',
-      };
-    }
-
-    // PR を作成
-    await NotifyProgress(slackApp, _config.slackChannelId, 'PR を作成するのでーす！', threadTs);
-
-    const prTitle = `fix: Issue #${meta.issueNumber} - ${meta.issueTitle}`;
-    const prBody = `## 概要
-Issue #${meta.issueNumber} に対応したのでーす！
-
-## 変更内容
-${runResult.output.slice(0, 1000)}
-
----
-🍑 すももが一生懸命お仕事したのです！`;
-
-    const prUrl = await CreatePullRequest(worktreeInfo, prTitle, prBody);
-
+    // Claude CLIの結果をそのまま返す（コミット・PR作成はLLMが判断して実行）
     return {
-      success: true,
+      success: runResult.success,
       output: runResult.output,
-      prUrl,
+      prUrl: runResult.prUrl,
+      error: runResult.error,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -732,6 +708,58 @@ function GetThreadTs(task: Task): string | undefined {
     return task.metadata.slackThreadTs;
   }
   return undefined;
+}
+
+/**
+ * Slackコンテキスト情報をプロンプトに追加する
+ */
+function BuildSlackContext(
+  userId: string,
+  channelId: string,
+  threadTs: string,
+  githubRepos: readonly string[]
+): string {
+  const reposList = githubRepos.map(repo => `  - ${repo}`).join('\n');
+  return `
+---
+Slackコンテキスト情報:
+- Channel ID: ${channelId}
+- Thread TS: ${threadTs}
+- User ID: ${userId}
+- このユーザーへの返信は <@${userId}> でメンションできます
+
+監視対象GitHubリポジトリ:
+${reposList}
+---`;
+}
+
+/**
+ * GitHub Issueコンテキスト情報をプロンプトに追加する
+ */
+function BuildGitHubContext(
+  meta: GitHubTaskMetadata,
+  branchName: string,
+  slackChannelId: string,
+  slackThreadTs?: string
+): string {
+  return `
+---
+GitHub Issue コンテキスト:
+- リポジトリ: ${meta.owner}/${meta.repo}
+- Issue: #${meta.issueNumber} - ${meta.issueTitle}
+- Issue URL: ${meta.issueUrl}
+- 作業ブランチ: ${branchName}
+${meta.requestingUser ? `- リクエストユーザー: ${meta.requestingUser}` : ''}
+
+Slack通知先:
+- Channel ID: ${slackChannelId}
+${slackThreadTs ? `- Thread TS: ${slackThreadTs}` : ''}
+
+目標:
+- このIssueを解決するコードを実装してください
+- 実装が完了したら、コミットしてPull Requestを作成してください
+- PRのタイトルには Issue番号を含めてください（例: fix: #${meta.issueNumber} - 説明）
+---`;
 }
 
 /**

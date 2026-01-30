@@ -11,12 +11,24 @@ import sys
 import subprocess
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 # 承認サーバーのURL
 APPROVAL_SERVER_URL = os.environ.get('APPROVAL_SERVER_URL', 'http://localhost:3001')
 
 # tmuxセッション名（環境変数から取得）
 TMUX_SESSION = os.environ.get('SUMOMO_TMUX_SESSION', '')
+
+# 認証トークンファイルのパス
+AUTH_TOKEN_FILE = Path.home() / '.sumomo' / 'auth-token'
+
+
+def get_auth_token() -> str:
+    """認証トークンをファイルから読み込む"""
+    try:
+        return AUTH_TOKEN_FILE.read_text().strip()
+    except FileNotFoundError:
+        return ''
 
 
 def main():
@@ -63,8 +75,14 @@ def request_approval(tool_name: str, tool_input: dict) -> dict:
         "tool_input": tool_input
     }).encode('utf-8')
 
+    # 認証トークンを取得
+    auth_token = get_auth_token()
+    if not auth_token:
+        raise Exception("Auth token not found. Is sumomo running?")
+
     headers = {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-Auth-Token': auth_token
     }
 
     request = urllib.request.Request(url, data=data, headers=headers, method='POST')
