@@ -89,7 +89,7 @@ function IsUserAllowed(username: string): boolean {
  */
 export function InitGitHubPoller(config: Config): void {
   _octokit = new Octokit({
-    auth: config.githubToken,
+    auth: config.githubToken ?? '',
   });
   _allowedUsers = config.allowedUsers;
 }

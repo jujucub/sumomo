@@ -144,7 +144,7 @@ export interface Config {
   readonly slackBotToken: string;
   readonly slackAppToken: string;
   readonly slackChannelId: string;
-  readonly githubToken: string;
+  readonly githubToken?: string;
   readonly githubRepos: readonly string[];
   readonly approvalServerPort: number;
   readonly githubPollInterval: number;
