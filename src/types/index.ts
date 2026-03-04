@@ -151,6 +151,7 @@ export interface Config {
   readonly allowedUsers: AllowedUsers;
   readonly reflectionConfig: ReflectionConfig;
   readonly channelConfig: ChannelConfig;
+  readonly memoryConfig: MemoryConfig;
 }
 
 // Slack メッセージブロック
@@ -201,6 +202,7 @@ export interface WorkHistoryRecord {
   readonly issueNumber?: number;
   readonly prUrl?: string;
   readonly summary: string;
+  readonly memoryEvent?: MemoryEvent;
 }
 
 // チャネル設定
@@ -297,4 +299,155 @@ export interface HookInput {
 export interface HookOutput {
   readonly permissionDecision?: ApprovalDecision;
   readonly message?: string;
+}
+
+// ==============================
+// メモリシステム型定義
+// ==============================
+
+// メモリの発生元（判別共用体）
+export interface SlackMemorySource {
+  readonly channel: 'slack';
+  readonly channelId: string;
+  readonly threadTs: string;
+}
+
+export interface LineMemorySource {
+  readonly channel: 'line';
+  readonly groupId?: string;
+  readonly replyToken?: string;
+}
+
+export interface GitHubMemorySource {
+  readonly channel: 'github';
+  readonly owner: string;
+  readonly repo: string;
+  readonly issueNumber: number;
+}
+
+export type MemorySource = SlackMemorySource | LineMemorySource | GitHubMemorySource;
+
+// メモリカテゴリ階層
+export interface MemoryCategory {
+  readonly abstractCategory: string;
+  readonly concreteCategory: string;
+}
+
+// メモリカテゴリパス（プロジェクト名を含むフルパス）
+export interface MemoryCategoryPath {
+  readonly abstractCategory: string;
+  readonly concreteCategory: string;
+  readonly projectName: string;
+}
+
+// ルーティング結果
+export interface MemoryRoutingResult {
+  readonly primaryPath: MemoryCategoryPath;
+  readonly secondary: MemoryCategoryPath[];
+  readonly isNew: boolean;
+  readonly suggestedName: string | null;
+  readonly suggestedCategory: MemoryCategory | null;
+  readonly suggestedDescription: string | null;
+  readonly confidence: 'high' | 'medium' | 'low';
+  readonly reasoning: string;
+  readonly pinnedContent: string | null;
+}
+
+// セッションメモリの内容
+export interface SessionMemoryContent {
+  readonly sessionId: string;
+  readonly content: string;
+  readonly lastUpdatedAt: string;
+}
+
+// セッションメモリ
+export interface SessionMemory {
+  readonly sessionId: string;
+  readonly projectName: string;
+  readonly filePath: string;
+  readonly createdAt: string;
+  readonly lastUpdatedAt: string;
+  readonly platformInfo: MemorySource;
+  readonly content: string;
+}
+
+// メモリエントリ
+export interface MemoryEntry {
+  readonly timestamp: string;
+  readonly content: string;
+  readonly source: MemorySource;
+  readonly isSummarized: boolean;
+  readonly summarizedAt: string | null;
+}
+
+// 固定記憶エントリ
+export interface PinnedEntry {
+  readonly timestamp: string;
+  readonly content: string;
+  readonly originalPrompt: string;
+  readonly source: MemorySource;
+}
+
+// メモリイベント種別
+export type MemoryEventType = 'memory_created' | 'memory_updated' | 'memory_summarized' | 'memory_routed';
+
+// メモリイベント（作業履歴記録用）
+export interface MemoryEvent {
+  readonly type: MemoryEventType;
+  readonly projectName: string;
+  readonly timestamp: string;
+  readonly details: string;
+}
+
+// メモリ設定
+export interface MemoryConfig {
+  readonly enabled: boolean;
+  readonly memoryDir: string;
+  readonly maxMemoryFileSize: number;
+  readonly compressionTarget: number;
+  readonly maxInjectionSize: number;
+  readonly recencyProtectionDays: number;
+  readonly maxBackups: number;
+}
+
+// プロジェクト概要（一覧用）
+export interface ProjectSummary {
+  readonly projectName: string;
+  readonly categoryPath: MemoryCategoryPath;
+  readonly description: string;
+  readonly lastUpdatedAt: string;
+  readonly sessionIds: string[];
+}
+
+// プロジェクトメモリ内容（読み取り結果）
+export interface ProjectMemoryContent {
+  readonly projectName: string;
+  readonly categoryPath: MemoryCategoryPath;
+  readonly memoryContent: string;
+  readonly pinnedContent: string;
+  readonly sessionMemories: SessionMemoryContent[];
+  readonly totalSizeBytes: number;
+}
+
+// メモリエントリ入力
+export interface MemoryEntryInput {
+  readonly content: string;
+  readonly source: MemorySource;
+}
+
+// 固定記憶入力
+export interface PinnedEntryInput {
+  readonly content: string;
+  readonly originalPrompt: string;
+  readonly source: MemorySource;
+}
+
+// 概要化結果
+export interface SummarizeResult {
+  readonly success: boolean;
+  readonly originalSize: number;
+  readonly newSize: number;
+  readonly entriesSummarized: number;
+  readonly entriesPreserved: number;
+  readonly backupPath: string;
 }

@@ -36,7 +36,15 @@ import {
   GetAdminConfig,
 } from './admin/store.js';
 import { SetupGlobalMcpConfig } from './mcp/setup.js';
-import { RecordTaskCompletion } from './history/recorder.js';
+import { RecordTaskCompletion, RecordMemoryEvent } from './history/recorder.js';
+import { GetMemoryStore } from './memory/store.js';
+import { GetMemoryRouter } from './memory/router.js';
+import { GetMemoryInjector } from './memory/injector.js';
+import { GetMemorySummarizer } from './memory/summarizer.js';
+import type {
+  MemoryRoutingResult,
+  MemorySource,
+} from './types/index.js';
 import {
   InitReflectionScheduler,
   StartReflectionScheduler,
@@ -175,6 +183,7 @@ async function HandleChannelMessage(
   metadata: TaskMetadata,
   prompt: string
 ): Promise<void> {
+  console.log(`HandleChannelMessage called: source=${metadata.source}, prompt="${prompt.slice(0, 50)}"`);
   if (!_taskQueue || !_config) return;
 
   // タスクをキューに追加
@@ -259,6 +268,7 @@ function OnTaskAdded(_task: Task): void {
  * 次のタスクを処理する
  */
 async function ProcessNextTask(): Promise<void> {
+  console.log(`ProcessNextTask called: isProcessing=${_isProcessing}, isRunning=${_isRunning}, pendingTasks=${_taskQueue?.GetPendingCount() ?? 'N/A'}`);
   if (!_taskQueue || !_claudeRunner || !_config || !_router) return;
   if (_isProcessing) return;
   if (!_isRunning) return;
@@ -272,12 +282,22 @@ async function ProcessNextTask(): Promise<void> {
 
   console.log(`Processing task: ${task.id} (requestedBy: ${requestedByUserId ?? 'none'})`);
 
+  // メモリ関連の状態
+  let memoryRoutingResult: MemoryRoutingResult | null = null;
+  let memorySessionId: string | null = null;
+
   try {
     let result: { success: boolean; output: string; prUrl?: string; error?: string };
 
+    // メモリの実行前処理: ルーティング + コンテキスト構築
+    const memoryResult = await BuildMemoryContextForTask(task);
+    memoryRoutingResult = memoryResult.routingResult;
+    memorySessionId = memoryResult.sessionId;
+    const memoryContext = memoryResult.memoryContext;
+
     if (task.metadata.source === 'github') {
       // GitHub Issue の場合は worktree で処理
-      result = await ProcessGitHubTask(task);
+      result = await ProcessGitHubTask(task, memoryContext);
     } else if (task.metadata.source === 'slack') {
       // Slack の場合
       const slackMeta = task.metadata as SlackTaskMetadata;
@@ -289,17 +309,17 @@ async function ProcessNextTask(): Promise<void> {
       if (linkedIssue) {
         // Issue用スレッドの場合: Issueのセッションとworktreeを使用
         console.log(`Thread ${slackMeta.threadTs} is linked to issue #${linkedIssue.issueNumber}`);
-        result = await ProcessSlackAsIssueTask(task, linkedIssue);
+        result = await ProcessSlackAsIssueTask(task, linkedIssue, memoryContext);
       } else if (slackMeta.targetRepo) {
         // targetRepoが指定されている場合: そのリポジトリのworktreeで作業
         console.log(`Processing with target repo: ${slackMeta.targetRepo}`);
-        result = await ProcessSlackWithTargetRepo(task, slackMeta.targetRepo);
+        result = await ProcessSlackWithTargetRepo(task, slackMeta.targetRepo, memoryContext);
       } else {
         // スレッドにtargetRepoが紐づいているかチェック（スラッシュコマンドで開始したスレッド）
         const linkedTargetRepo = sessionStore.GetTargetRepoForThread(slackMeta.threadTs);
         if (linkedTargetRepo) {
           console.log(`Thread ${slackMeta.threadTs} is linked to target repo: ${linkedTargetRepo}`);
-          result = await ProcessSlackWithTargetRepo(task, linkedTargetRepo);
+          result = await ProcessSlackWithTargetRepo(task, linkedTargetRepo, memoryContext);
         } else {
         // 通常のSlackタスク
         // 同じスレッドの既存セッションを取得（チャネル固有 → canonical userフォールバック）
@@ -314,13 +334,13 @@ async function ProcessNextTask(): Promise<void> {
 
         const onWorkLog = CreateWorkLogCallback(task);
 
-        // Slackコンテキストをプロンプトに追加
+        // Slackコンテキスト + メモリコンテキストをプロンプトに追加
         const promptWithContext = task.prompt + BuildSlackContext(
           slackMeta.userId,
           slackMeta.channelId,
           slackMeta.threadTs,
           _config.githubRepos
-        );
+        ) + memoryContext;
 
         const workingDirectory = existingSession?.workingDirectory ?? GetWorkspacePath();
         const runResult = await _claudeRunner.Run(task.id, promptWithContext, {
@@ -359,6 +379,9 @@ async function ProcessNextTask(): Promise<void> {
 
     // 作業履歴を記録
     RecordTaskCompletion(task, result);
+
+    // メモリの実行後処理: タスク結果のメモリ記録
+    RecordMemoryForTask(task, result, memoryRoutingResult, memorySessionId);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`Task failed: ${task.id}`, error);
@@ -385,7 +408,8 @@ async function ProcessNextTask(): Promise<void> {
  */
 async function ProcessSlackAsIssueTask(
   task: Task,
-  issueInfo: { owner: string; repo: string; issueNumber: number }
+  issueInfo: { owner: string; repo: string; issueNumber: number },
+  memoryContext: string = ''
 ): Promise<{ success: boolean; output: string; prUrl?: string; error?: string }> {
   if (!_config || !_claudeRunner || !_router) {
     return { success: false, output: '', error: 'Not initialized' };
@@ -433,13 +457,13 @@ async function ProcessSlackAsIssueTask(
 
     const onWorkLog = CreateWorkLogCallback(task);
 
-    // Slackコンテキストをプロンプトに追加して Claude CLI を実行
+    // Slackコンテキスト + メモリコンテキストをプロンプトに追加して Claude CLI を実行
     const promptWithContext = task.prompt + BuildSlackContext(
       slackMeta.userId,
       slackMeta.channelId,
       slackMeta.threadTs,
       _config!.githubRepos
-    );
+    ) + memoryContext;
 
     const runResult = await _claudeRunner.Run(task.id, promptWithContext, {
       workingDirectory: worktreeInfo.worktreePath,
@@ -487,7 +511,8 @@ async function ProcessSlackAsIssueTask(
  */
 async function ProcessSlackWithTargetRepo(
   task: Task,
-  targetRepo: string
+  targetRepo: string,
+  memoryContext: string = ''
 ): Promise<{ success: boolean; output: string; prUrl?: string; error?: string }> {
   if (!_config || !_claudeRunner || !_router) {
     return { success: false, output: '', error: 'Not initialized' };
@@ -547,14 +572,14 @@ async function ProcessSlackWithTargetRepo(
 
     const onWorkLog = CreateWorkLogCallback(task);
 
-    // コンテキストをプロンプトに追加
+    // コンテキスト + メモリをプロンプトに追加
     const promptWithContext = task.prompt + BuildSlackRepoContext(
       slackMeta.userId,
       slackMeta.channelId,
       slackMeta.threadTs,
       targetRepo,
       worktreeInfo.branchName
-    );
+    ) + memoryContext;
 
     // セッション再開時は既存の作業ディレクトリを使用し、新規時はworktreeパスを使用
     const workingDirectory = existingSession?.workingDirectory ?? worktreeInfo.worktreePath;
@@ -781,7 +806,8 @@ async function ProcessHttpTask(
  * GitHub Issue タスクを worktree で処理する（セッション継続対応）
  */
 async function ProcessGitHubTask(
-  task: Task
+  task: Task,
+  memoryContext: string = ''
 ): Promise<{ success: boolean; output: string; prUrl?: string; error?: string }> {
   if (!_config || !_claudeRunner || !_router) {
     return { success: false, output: '', error: 'Not initialized' };
@@ -834,13 +860,13 @@ async function ProcessGitHubTask(
       console.log(`Creating new session for issue #${meta.issueNumber}`);
     }
 
-    // Claude 用のプロンプトを構築（GitHub情報とSlack情報を含む）
+    // Claude 用のプロンプトを構築（GitHub情報とSlack情報 + メモリを含む）
     const worktreePrompt = task.prompt + BuildGitHubContext(
       meta,
       worktreeInfo.branchName,
       _config.slackChannelId,
       threadTs
-    );
+    ) + memoryContext;
 
     await _router.notifyProgress(task.id, task.metadata, Msg('task.startClaude'));
 
@@ -1200,6 +1226,167 @@ function GetPlatformUserId(metadata: TaskMetadata): string | undefined {
     case 'github': return (metadata as GitHubTaskMetadata).requestingUser;
     case 'line': return (metadata as LineTaskMetadata).userId;
     case 'http': return (metadata as HttpTaskMetadata).deviceId;
+  }
+}
+
+/**
+ * タスクメタデータからメモリソースを構築する
+ */
+function BuildMemorySource(task: Task): MemorySource {
+  if (task.metadata.source === 'slack') {
+    const meta = task.metadata as SlackTaskMetadata;
+    return {
+      channel: 'slack',
+      channelId: meta.channelId,
+      threadTs: meta.threadTs,
+    };
+  }
+  const meta = task.metadata as GitHubTaskMetadata;
+  return {
+    channel: 'github',
+    owner: meta.owner,
+    repo: meta.repo,
+    issueNumber: meta.issueNumber,
+  };
+}
+
+/**
+ * タスクからユーザーIDを取得する
+ */
+function GetUserId(task: Task): string {
+  if (task.metadata.source === 'slack') {
+    return (task.metadata as SlackTaskMetadata).userId;
+  }
+  const meta = task.metadata as GitHubTaskMetadata;
+  return meta.requestingUser ?? 'unknown';
+}
+
+/**
+ * メモリの実行前処理: ルーティング + コンテキスト構築
+ */
+async function BuildMemoryContextForTask(
+  task: Task
+): Promise<{ memoryContext: string; routingResult: MemoryRoutingResult | null; sessionId: string | null }> {
+  if (!_config?.memoryConfig.enabled) {
+    return { memoryContext: '', routingResult: null, sessionId: null };
+  }
+
+  try {
+    const router = GetMemoryRouter(_config.memoryConfig);
+    const injector = GetMemoryInjector(_config.memoryConfig);
+    const store = GetMemoryStore(_config.memoryConfig);
+    const source = BuildMemorySource(task);
+
+    // ルーティング
+    console.log(`BuildMemoryContextForTask: starting RouteConversation for task ${task.id}`);
+    const routingResult = await router.RouteConversation(task.prompt);
+    console.log(`BuildMemoryContextForTask: RouteConversation completed for task ${task.id}, project=${routingResult.primaryPath.projectName}, confidence=${routingResult.confidence}`);
+
+    // 新規プロジェクトの場合は作成
+    if (routingResult.isNew) {
+      const description = routingResult.suggestedDescription ?? task.prompt.slice(0, 100);
+      store.CreateProject(routingResult.primaryPath, description);
+
+      RecordMemoryEvent({
+        type: 'memory_created',
+        projectName: routingResult.primaryPath.projectName,
+        timestamp: new Date().toISOString(),
+        details: `新規プロジェクト作成: ${routingResult.primaryPath.abstractCategory}/${routingResult.primaryPath.concreteCategory}/${routingResult.primaryPath.projectName}`,
+      }, GetUserId(task));
+    }
+
+    // 固定記憶検出（LLMベース）
+    if (routingResult.pinnedContent) {
+      store.AppendPinned(routingResult.primaryPath, {
+        content: routingResult.pinnedContent,
+        originalPrompt: task.prompt.slice(0, 200),
+        source,
+      });
+      console.log(`Memory: Pinned content detected by LLM and saved for ${routingResult.primaryPath.projectName}`);
+    }
+
+    // セッションメモリを作成（新規セッション）
+    const sessionId = `task-${task.id}`;
+    store.CreateSessionMemory(routingResult.primaryPath, sessionId, source);
+
+    // ルーティングイベントを記録
+    RecordMemoryEvent({
+      type: 'memory_routed',
+      projectName: routingResult.primaryPath.projectName,
+      timestamp: new Date().toISOString(),
+      details: `ルーティング: confidence=${routingResult.confidence}, isNew=${routingResult.isNew}`,
+    }, GetUserId(task));
+
+    // メモリコンテキストを構築
+    const memoryContext = await injector.BuildMemoryContext(routingResult);
+
+    return { memoryContext, routingResult, sessionId };
+  } catch (error) {
+    console.error('Memory pre-processing error (continuing without memory):', error);
+    return { memoryContext: '', routingResult: null, sessionId: null };
+  }
+}
+
+/**
+ * メモリの実行後処理: タスク結果のメモリ記録
+ */
+function RecordMemoryForTask(
+  task: Task,
+  result: { success: boolean; output: string },
+  routingResult: MemoryRoutingResult | null,
+  sessionId: string | null
+): void {
+  if (!_config?.memoryConfig.enabled || !routingResult || !sessionId) return;
+
+  try {
+    const store = GetMemoryStore(_config.memoryConfig);
+    const source = BuildMemorySource(task);
+
+    // セッションメモリにタスク結果の要約を追記
+    const summary = result.output.trim().slice(0, 300);
+    store.AppendSessionMemory(routingResult.primaryPath, sessionId, {
+      content: `タスク${result.success ? '完了' : '失敗'}: ${summary}`,
+      source,
+    });
+
+    // MEMORY.md の活動セクションに追記
+    const activitySummary = result.success
+      ? `タスク完了: ${task.prompt.slice(0, 100)}`
+      : `タスク失敗: ${task.prompt.slice(0, 100)}`;
+    store.AppendMemory(routingResult.primaryPath, {
+      content: activitySummary,
+      source,
+    });
+
+    // メモリ更新イベントを記録
+    RecordMemoryEvent({
+      type: 'memory_updated',
+      projectName: routingResult.primaryPath.projectName,
+      timestamp: new Date().toISOString(),
+      details: `タスク結果を記録: ${result.success ? '成功' : '失敗'}`,
+    }, GetUserId(task));
+
+    // 概要化トリガー (T020)
+    const summarizer = GetMemorySummarizer(_config.memoryConfig);
+    if (summarizer.ShouldSummarize(routingResult.primaryPath)) {
+      console.log(`Memory: Triggering summarization for ${routingResult.primaryPath.projectName}`);
+      // 非同期で概要化を実行（タスク完了をブロックしない）
+      void summarizer.Summarize(routingResult.primaryPath).then((summarizeResult) => {
+        if (summarizeResult.success) {
+          RecordMemoryEvent({
+            type: 'memory_summarized',
+            projectName: routingResult!.primaryPath.projectName,
+            timestamp: new Date().toISOString(),
+            details: `概要化完了: ${summarizeResult.originalSize} -> ${summarizeResult.newSize} bytes`,
+          }, GetUserId(task));
+        }
+      }).catch((err) => {
+        console.error('Memory summarization failed:', err);
+      });
+    }
+  } catch (error) {
+    // メモリの失敗がタスク完了を阻害しないよう保護
+    console.error('Memory post-processing error (task completion unaffected):', error);
   }
 }
 

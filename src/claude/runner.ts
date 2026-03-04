@@ -28,6 +28,8 @@ export interface RunnerOptions {
   readonly resumeSessionId?: string; // 継続するセッションID
   readonly systemPrompt?: string; // カスタムシステムプロンプト
   readonly approvalServerPort?: number; // 承認サーバーポート
+  readonly maxTurns?: number; // CLIの最大ターン数
+  readonly sanitizeEnv?: boolean; // Slack関連env変数を除外
 }
 
 /**
@@ -113,19 +115,34 @@ export class ClaudeRunner {
       args.push('--output-format', 'stream-json');
       args.push('--verbose');
 
+      // 最大ターン数の制限
+      if (options.maxTurns !== undefined) {
+        args.push('--max-turns', String(options.maxTurns));
+      }
+
       // Claude CLI を起動
       // CLAUDE_PROJECT_DIR を明示的に設定してworktree側の.claude/設定を使用する
+      const spawnEnv: Record<string, string | undefined> = {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: options.workingDirectory,
+        CLAPS_TASK_ID: taskId,
+        APPROVAL_SERVER_URL: `http://localhost:${options.approvalServerPort ?? 3001}`,
+      };
+
+      // sanitizeEnv: Slack関連のenv変数を除外してMCPサーバーの不要な起動を防ぐ
+      if (options.sanitizeEnv) {
+        delete spawnEnv.SLACK_BOT_TOKEN;
+        delete spawnEnv.SLACK_APP_TOKEN;
+        delete spawnEnv.SLACK_TEAM_ID;
+        delete spawnEnv.SLACK_SIGNING_SECRET;
+      }
+
       const claudeProcess = spawn(
         'claude',
         args,
         {
           cwd: options.workingDirectory,
-          env: {
-            ...process.env,
-            CLAUDE_PROJECT_DIR: options.workingDirectory,
-            CLAPS_TASK_ID: taskId,
-            APPROVAL_SERVER_URL: `http://localhost:${options.approvalServerPort ?? 3001}`,
-          },
+          env: spawnEnv,
           stdio: ['pipe', 'pipe', 'pipe'],
           shell: false,
         }

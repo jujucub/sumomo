@@ -6,7 +6,7 @@ import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import type { Config, AllowedUsers, ChannelConfig, ReflectionConfig } from './types/index.js';
+import type { Config, AllowedUsers, ChannelConfig, ReflectionConfig, MemoryConfig } from './types/index.js';
 import { LoadAdminConfig, HasAdminConfig } from './admin/store.js';
 
 // ~/.claps/.env を優先的に読み込む（存在する場合）
@@ -137,6 +137,17 @@ export function LoadConfig(): Config {
     maxRecordsPerUser: parseInt(process.env['REFLECTION_MAX_RECORDS'] ?? '50', 10),
   };
 
+  // メモリシステムの設定
+  const memoryConfig: MemoryConfig = {
+    enabled: process.env['MEMORY_ENABLED'] !== 'false', // デフォルト: true
+    memoryDir: process.env['MEMORY_DIR'] ?? path.join(os.homedir(), '.claps', 'memory'),
+    maxMemoryFileSize: parseInt(process.env['MEMORY_MAX_FILE_SIZE'] ?? '15000', 10),
+    compressionTarget: parseFloat(process.env['MEMORY_COMPRESSION_TARGET'] ?? '0.6'),
+    maxInjectionSize: parseInt(process.env['MEMORY_MAX_INJECTION_SIZE'] ?? '10000', 10),
+    recencyProtectionDays: parseInt(process.env['MEMORY_RECENCY_PROTECTION_DAYS'] ?? '7', 10),
+    maxBackups: parseInt(process.env['MEMORY_MAX_BACKUPS'] ?? '3', 10),
+  };
+
   return {
     anthropicApiKey,
     slackBotToken,
@@ -149,5 +160,6 @@ export function LoadConfig(): Config {
     allowedUsers,
     reflectionConfig,
     channelConfig,
+    memoryConfig,
   };
 }
