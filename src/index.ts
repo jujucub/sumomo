@@ -55,6 +55,16 @@ import { HttpAdapter } from './http/adapter.js';
 // 作業ログの投稿間隔（ミリ秒）
 const WORK_LOG_INTERVAL_MS = 10000;
 
+/**
+ * GitHubトークンを取得する（未設定の場合はエラー）
+ */
+function RequireGitHubToken(): string {
+  if (!_config?.githubToken) {
+    throw new Error('GITHUB_TOKEN is not configured. GitHub repository operations are unavailable.');
+  }
+  return _config.githubToken;
+}
+
 // アプリケーション状態
 let _isRunning = false;
 let _config: Config | undefined;
@@ -126,9 +136,13 @@ async function Start(): Promise<void> {
     throw new Error('Slack adapter failed to start - cannot continue without Slack');
   }
 
-  // GitHub Poller を初期化・開始
-  InitGitHubPoller(_config);
-  StartGitHubPoller(_config, HandleGitHubIssue, HandleIssueClosed);
+  // GitHub Poller を初期化・開始（リポジトリが設定されている場合のみ）
+  if (_config.githubRepos.length > 0) {
+    InitGitHubPoller(_config);
+    StartGitHubPoller(_config, HandleGitHubIssue, HandleIssueClosed);
+  } else {
+    console.log('⏭️ GitHub Poller skipped: GITHUB_REPOS is not configured');
+  }
 
   // タスクキューのイベントを監視
   _taskQueue.On('added', OnTaskAdded);
@@ -399,7 +413,7 @@ async function ProcessSlackAsIssueTask(
     const repoPath = await GetOrCloneRepo(
       issueInfo.owner,
       issueInfo.repo,
-      _config.githubToken
+      RequireGitHubToken()
     );
 
     // 既存の worktree を取得（なければ作成）
@@ -504,7 +518,7 @@ async function ProcessSlackWithTargetRepo(
   try {
     // リポジトリをクローン（または更新）
     console.log(`Getting or cloning repo ${targetRepo}...`);
-    const repoPath = await GetOrCloneRepo(owner, repo, _config.githubToken);
+    const repoPath = await GetOrCloneRepo(owner, repo, RequireGitHubToken());
 
     // スレッドにtargetRepoを紐づける（同じスレッドでのメンションも同じworktreeで作業するため）
     sessionStore.LinkThreadToTargetRepo(slackMeta.threadTs, targetRepo);
@@ -609,7 +623,7 @@ async function ProcessLineTask(
       const owner = parts[0] as string;
       const repo = parts[1] as string;
 
-      const repoPath = await GetOrCloneRepo(owner, repo, _config.githubToken);
+      const repoPath = await GetOrCloneRepo(owner, repo, RequireGitHubToken());
       const worktreeIdentifier = Date.now();
       const { worktreeInfo } = await GetOrCreateWorktree(repoPath, owner, repo, worktreeIdentifier);
 
@@ -708,7 +722,7 @@ async function ProcessHttpTask(
       const owner = parts[0] as string;
       const repo = parts[1] as string;
 
-      const repoPath = await GetOrCloneRepo(owner, repo, _config.githubToken);
+      const repoPath = await GetOrCloneRepo(owner, repo, RequireGitHubToken());
       const worktreeIdentifier = Date.now();
       const { worktreeInfo } = await GetOrCreateWorktree(repoPath, owner, repo, worktreeIdentifier);
 
@@ -794,7 +808,7 @@ async function ProcessGitHubTask(
   try {
     // リポジトリをクローン（または更新）
     console.log(`Getting or cloning repo ${meta.owner}/${meta.repo}...`);
-    const repoPath = await GetOrCloneRepo(meta.owner, meta.repo, _config.githubToken);
+    const repoPath = await GetOrCloneRepo(meta.owner, meta.repo, RequireGitHubToken());
 
     // 既存の worktree があれば再利用、なければ新規作成
     console.log(`Getting or creating worktree for issue #${meta.issueNumber}...`);
@@ -967,7 +981,9 @@ function BuildSlackContext(
   threadTs: string,
   githubRepos: readonly string[]
 ): string {
-  const reposList = githubRepos.map(repo => `  - ${repo}`).join('\n');
+  const reposSection = githubRepos.length > 0
+    ? `\n監視対象GitHubリポジトリ:\n${githubRepos.map(repo => `  - ${repo}`).join('\n')}`
+    : '';
   return `
 ---
 Slackコンテキスト情報:
@@ -975,9 +991,7 @@ Slackコンテキスト情報:
 - Thread TS: ${threadTs}
 - User ID: ${userId}
 - このユーザーへの返信は <@${userId}> でメンションできます
-
-監視対象GitHubリポジトリ:
-${reposList}
+${reposSection}
 ---`;
 }
 
@@ -1047,15 +1061,15 @@ function BuildLineContext(
   targetRepo?: string,
   branchName?: string
 ): string {
-  const reposList = githubRepos.map(repo => `  - ${repo}`).join('\n');
+  const reposSection = githubRepos.length > 0
+    ? `\n監視対象GitHubリポジトリ:\n${githubRepos.map(repo => `  - ${repo}`).join('\n')}`
+    : '';
   let context = `
 ---
 LINEコンテキスト情報:
 - ソース: LINE Bot
 - User ID: ${meta.userId}
-
-監視対象GitHubリポジトリ:
-${reposList}`;
+${reposSection}`;
 
   if (targetRepo && branchName) {
     context += `
@@ -1082,16 +1096,16 @@ function BuildHttpContext(
   targetRepo?: string,
   branchName?: string
 ): string {
-  const reposList = githubRepos.map(repo => `  - ${repo}`).join('\n');
+  const reposSection = githubRepos.length > 0
+    ? `\n監視対象GitHubリポジトリ:\n${githubRepos.map(repo => `  - ${repo}`).join('\n')}`
+    : '';
   let context = `
 ---
 HTTPコンテキスト情報:
 - ソース: HTTP API
 - Correlation ID: ${meta.correlationId}
 ${meta.deviceId ? `- Device ID: ${meta.deviceId}` : ''}
-
-監視対象GitHubリポジトリ:
-${reposList}`;
+${reposSection}`;
 
   if (targetRepo && branchName) {
     context += `

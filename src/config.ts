@@ -50,15 +50,16 @@ export function LoadConfig(): Config {
   if (!slackChannelId) {
     throw new Error('SLACK_CHANNEL_ID is required');
   }
-  if (!githubToken) {
-    throw new Error('GITHUB_TOKEN is required');
-  }
-  if (!githubReposStr) {
-    throw new Error('GITHUB_REPOS is required');
-  }
 
-  // 環境変数からのリポジトリ設定
-  const envGithubRepos = githubReposStr.split(',').map((repo) => repo.trim());
+  // 環境変数からのリポジトリ設定（未設定の場合は空配列）
+  const envGithubRepos = githubReposStr
+    ? githubReposStr.split(',').map((repo) => repo.trim()).filter((repo) => repo !== '')
+    : [];
+
+  // GITHUB_TOKEN が未設定でも起動可能（GitHub連携機能は無効になる）
+  if (!githubToken && envGithubRepos.length > 0) {
+    throw new Error('GITHUB_TOKEN is required when GITHUB_REPOS is configured');
+  }
 
   const approvalServerPort = parseInt(
     process.env['APPROVAL_SERVER_PORT'] ?? '3001',
