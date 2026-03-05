@@ -7,7 +7,6 @@ import express from 'express';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   TaskSource,
@@ -25,10 +24,12 @@ import { CreateHttpApiRouter, type PendingTaskState, type PendingApprovalInfo, t
 import type { AdapterRegistry } from '../channel/registry.js';
 import type { Express } from 'express';
 import type { Server } from 'http';
+import { GetClapsDir } from '../git/repo.js';
 
-// 認証トークンファイルパス
-const AUTH_TOKEN_DIR = path.join(os.homedir(), '.claps');
-const AUTH_TOKEN_FILE = path.join(AUTH_TOKEN_DIR, 'auth-token');
+// 認証トークンファイルパスを取得する（遅延評価）
+function GetAuthTokenFile(): string {
+  return path.join(GetClapsDir(), 'auth-token');
+}
 
 /**
  * Deferred Promise
@@ -260,8 +261,8 @@ export class HttpAdapter implements ChannelAdapter {
    */
   private _validateToken(token: string): boolean {
     try {
-      if (!fs.existsSync(AUTH_TOKEN_FILE)) return false;
-      const storedToken = fs.readFileSync(AUTH_TOKEN_FILE, 'utf-8').trim();
+      if (!fs.existsSync(GetAuthTokenFile())) return false;
+      const storedToken = fs.readFileSync(GetAuthTokenFile(), 'utf-8').trim();
       if (storedToken.length === 0) return false;
 
       // タイミング攻撃を防ぐため定数時間比較

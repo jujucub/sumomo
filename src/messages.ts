@@ -5,8 +5,8 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
+import { GetClapsDir } from './git/repo.js';
 
 // メッセージ設定
 interface MessageConfig {
@@ -125,8 +125,10 @@ const DEFAULT_MESSAGES: Readonly<Record<string, string>> = {
   'suggestion.execute': '{emoji} 提案「{title}」をタスクとして実行いたしますわ',
 };
 
-// 設定ファイルのパス
-const MESSAGES_FILE_PATH = path.join(os.homedir(), '.claps', 'messages.json');
+// 設定ファイルのパスを取得する（遅延評価）
+function GetMessagesFilePathInternal(): string {
+  return path.join(GetClapsDir(), 'messages.json');
+}
 
 // キャッシュ
 let _cachedConfig: MessageConfig | undefined;
@@ -145,7 +147,7 @@ function LoadMessageConfig(): MessageConfig {
   };
 
   try {
-    const stat = fs.statSync(MESSAGES_FILE_PATH);
+    const stat = fs.statSync(GetMessagesFilePathInternal());
     const mtime = stat.mtimeMs;
 
     // キャッシュが有効ならそのまま返す
@@ -153,7 +155,7 @@ function LoadMessageConfig(): MessageConfig {
       return _cachedConfig;
     }
 
-    const content = fs.readFileSync(MESSAGES_FILE_PATH, 'utf-8').trim();
+    const content = fs.readFileSync(GetMessagesFilePathInternal(), 'utf-8').trim();
     if (content.length === 0) {
       return defaultConfig;
     }
@@ -239,7 +241,7 @@ export function GetBotName(): string {
  * メッセージ設定ファイルのパスを取得する
  */
 export function GetMessagesFilePath(): string {
-  return MESSAGES_FILE_PATH;
+  return GetMessagesFilePathInternal();
 }
 
 /**

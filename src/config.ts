@@ -4,18 +4,18 @@
 
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import type { Config, AllowedUsers, ChannelConfig, ReflectionConfig } from './types/index.js';
 import { LoadAdminConfig, HasAdminConfig } from './admin/store.js';
+import { GetClapsDir } from './git/repo.js';
 
-// ~/.claps/.env を優先的に読み込む（存在する場合）
-const clapsEnvPath = path.join(os.homedir(), '.claps', '.env');
+// プロジェクトルートの .env を先に読み込む（CLAPS_HOME を取得するため）
+dotenv.config();
+
+// GetClapsDir()/.env が存在すれば追加読み込み（override: true で上書き）
+const clapsEnvPath = path.join(GetClapsDir(), '.env');
 if (fs.existsSync(clapsEnvPath)) {
-  dotenv.config({ path: clapsEnvPath });
-} else {
-  // プロジェクトルートの .env を読み込む
-  dotenv.config();
+  dotenv.config({ path: clapsEnvPath, override: true });
 }
 
 /**

@@ -6,8 +6,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import type { TaskSource, UserMapping } from '../types/index.js';
+import { GetClapsDir } from '../git/repo.js';
 
 // セッション取得時の戻り値型
 export interface SessionResult {
@@ -49,9 +49,10 @@ interface SerializedStore {
   readonly threadToTargetRepo: Record<string, string>;
 }
 
-// 永続化ファイルパス
-const SESSIONS_DIR = path.join(os.homedir(), '.claps');
-const SESSIONS_FILE = path.join(SESSIONS_DIR, 'sessions.json');
+// 永続化ファイルパスを取得する（遅延評価）
+function GetSessionsFile(): string {
+  return path.join(GetClapsDir(), 'sessions.json');
+}
 
 /**
  * セッションストアクラス
@@ -75,11 +76,11 @@ class SessionStore {
    */
   private _load(): void {
     try {
-      if (!fs.existsSync(SESSIONS_FILE)) {
+      if (!fs.existsSync(GetSessionsFile())) {
         return;
       }
 
-      const data = fs.readFileSync(SESSIONS_FILE, 'utf-8');
+      const data = fs.readFileSync(GetSessionsFile(), 'utf-8');
       const parsed = JSON.parse(data) as Partial<SerializedStore>;
       const now = Date.now();
 
@@ -123,8 +124,8 @@ class SessionStore {
    */
   private _save(): void {
     try {
-      if (!fs.existsSync(SESSIONS_DIR)) {
-        fs.mkdirSync(SESSIONS_DIR, { recursive: true, mode: 0o700 });
+      if (!fs.existsSync(GetClapsDir())) {
+        fs.mkdirSync(GetClapsDir(), { recursive: true, mode: 0o700 });
       }
 
       const serialized: SerializedStore = {
@@ -143,7 +144,7 @@ class SessionStore {
         threadToTargetRepo: Object.fromEntries(this._threadToTargetRepo),
       };
 
-      fs.writeFileSync(SESSIONS_FILE, JSON.stringify(serialized, null, 2), { mode: 0o600 });
+      fs.writeFileSync(GetSessionsFile(), JSON.stringify(serialized, null, 2), { mode: 0o600 });
     } catch (error) {
       console.error('Failed to save sessions:', error);
     }

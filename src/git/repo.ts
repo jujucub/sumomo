@@ -10,10 +10,11 @@ import * as path from 'path';
 
 /**
  * .claps ディレクトリのパスを取得する
- * すべてのデータは ~/.claps/ に保存される
+ * CLAPS_HOME 環境変数が設定されている場合はそのパスを使用し、
+ * 未設定の場合は ~/.claps/ を返す（後方互換）
  */
 export function GetClapsDir(): string {
-  return path.join(os.homedir(), '.claps');
+  return process.env['CLAPS_HOME'] ?? path.join(os.homedir(), '.claps');
 }
 
 /**

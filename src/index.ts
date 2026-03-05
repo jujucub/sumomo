@@ -29,7 +29,7 @@ import {
   RemoveWorktree,
   InitializeWorkspace,
 } from './git/worktree.js';
-import { GetOrCloneRepo, GetWorkspacePath } from './git/repo.js';
+import { GetOrCloneRepo, GetWorkspacePath, GetClapsDir } from './git/repo.js';
 import {
   GetSlackUserForGitHub,
   GetAdminSlackUser,
@@ -71,6 +71,7 @@ let _router: NotificationRouter | undefined;
  */
 async function Start(): Promise<void> {
   console.log(Msg('console.startup'));
+  console.log(`CLAPS_HOME: ${GetClapsDir()}`);
 
   // 設定を読み込む
   _config = LoadConfig();
