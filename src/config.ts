@@ -9,13 +9,13 @@ import type { Config, AllowedUsers, ChannelConfig, ReflectionConfig } from './ty
 import { LoadAdminConfig, HasAdminConfig } from './admin/store.js';
 import { GetClapsDir } from './git/repo.js';
 
-// プロジェクトルートの .env を先に読み込む（CLAPS_HOME を取得するため）
-dotenv.config();
-
-// GetClapsDir()/.env が存在すれば追加読み込み（override: true で上書き）
+// CLAPS_HOME/.env を優先的に読み込む（存在する場合）
 const clapsEnvPath = path.join(GetClapsDir(), '.env');
 if (fs.existsSync(clapsEnvPath)) {
-  dotenv.config({ path: clapsEnvPath, override: true });
+  dotenv.config({ path: clapsEnvPath });
+} else {
+  // プロジェクトルートの .env を読み込む
+  dotenv.config();
 }
 
 /**
