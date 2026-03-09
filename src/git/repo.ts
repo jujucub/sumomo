@@ -8,12 +8,30 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+// --home 引数のキャッシュ
+let _clapsHomeFromArgs: string | undefined;
+let _argsParsed = false;
+
+/**
+ * process.argv から --home 引数を取得する
+ */
+function ParseHomeArg(): string | undefined {
+  if (!_argsParsed) {
+    const idx = process.argv.indexOf('--home');
+    if (idx !== -1 && idx + 1 < process.argv.length) {
+      _clapsHomeFromArgs = process.argv[idx + 1];
+    }
+    _argsParsed = true;
+  }
+  return _clapsHomeFromArgs;
+}
+
 /**
  * .claps ディレクトリのパスを取得する
- * すべてのデータは ~/.claps/ に保存される
+ * 優先順位: --home 引数 > CLAPS_HOME 環境変数 > ~/.claps（後方互換）
  */
 export function GetClapsDir(): string {
-  return path.join(os.homedir(), '.claps');
+  return ParseHomeArg() ?? process.env['CLAPS_HOME'] ?? path.join(os.homedir(), '.claps');
 }
 
 /**

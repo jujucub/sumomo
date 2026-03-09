@@ -9,9 +9,9 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import type { HookInput, HookOutput, TaskMetadata } from '../types/index.js';
 import type { NotificationRouter } from '../channel/router.js';
+import { GetClapsDir } from '../git/repo.js';
 
 // サーバー状態
 let _server: Server | undefined;
@@ -19,8 +19,11 @@ let _app: Express | undefined;
 
 // 認証トークン
 let _authToken: string | undefined;
-const AUTH_TOKEN_DIR = path.join(os.homedir(), '.claps');
-const AUTH_TOKEN_FILE = path.join(AUTH_TOKEN_DIR, 'auth-token');
+
+// 認証トークンファイルパスを取得する（遅延評価）
+function GetAuthTokenFile(): string {
+  return path.join(GetClapsDir(), 'auth-token');
+}
 
 // 通知ルーターへの参照（承認リクエスト送信用）
 let _router: NotificationRouter | undefined;
@@ -32,14 +35,14 @@ function GenerateAuthToken(): string {
   const token = crypto.randomBytes(32).toString('hex');
 
   // ディレクトリがなければ作成
-  if (!fs.existsSync(AUTH_TOKEN_DIR)) {
-    fs.mkdirSync(AUTH_TOKEN_DIR, { mode: 0o700 });
+  if (!fs.existsSync(GetClapsDir())) {
+    fs.mkdirSync(GetClapsDir(), { mode: 0o700 });
   }
 
   // トークンをファイルに保存（所有者のみ読み書き可能）
-  fs.writeFileSync(AUTH_TOKEN_FILE, token, { mode: 0o600 });
+  fs.writeFileSync(GetAuthTokenFile(), token, { mode: 0o600 });
 
-  console.log(`Auth token saved to ${AUTH_TOKEN_FILE}`);
+  console.log(`Auth token saved to ${GetAuthTokenFile()}`);
   return token;
 }
 
@@ -238,8 +241,8 @@ export function StartApprovalServer(port: number): Promise<void> {
 export function StopApprovalServer(): Promise<void> {
   return new Promise((resolve) => {
     // 認証トークンファイルを削除
-    if (fs.existsSync(AUTH_TOKEN_FILE)) {
-      fs.unlinkSync(AUTH_TOKEN_FILE);
+    if (fs.existsSync(GetAuthTokenFile())) {
+      fs.unlinkSync(GetAuthTokenFile());
       console.log('Auth token file removed');
     }
     _authToken = undefined;

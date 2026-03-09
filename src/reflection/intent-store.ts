@@ -5,11 +5,13 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import type { UserIntent } from '../types/index.js';
+import { GetClapsDir } from '../git/repo.js';
 
-// 保存ディレクトリ
-const INTENTS_DIR = path.join(os.homedir(), '.claps', 'intents');
+// 保存ディレクトリを取得する（遅延評価）
+function GetIntentsDir(): string {
+  return path.join(GetClapsDir(), 'intents');
+}
 
 /**
  * ユーザーIDをサニタイズしてファイル名に使用する
@@ -26,7 +28,7 @@ export class IntentStore {
    * ユーザーのインテントを取得する
    */
   Get(userId: string): UserIntent | undefined {
-    const filePath = path.join(INTENTS_DIR, `${SanitizeUserId(userId)}.json`);
+    const filePath = path.join(GetIntentsDir(), `${SanitizeUserId(userId)}.json`);
 
     if (!fs.existsSync(filePath)) {
       return undefined;
@@ -46,11 +48,11 @@ export class IntentStore {
    */
   Save(intent: UserIntent): void {
     try {
-      if (!fs.existsSync(INTENTS_DIR)) {
-        fs.mkdirSync(INTENTS_DIR, { recursive: true, mode: 0o700 });
+      if (!fs.existsSync(GetIntentsDir())) {
+        fs.mkdirSync(GetIntentsDir(), { recursive: true, mode: 0o700 });
       }
 
-      const filePath = path.join(INTENTS_DIR, `${SanitizeUserId(intent.userId)}.json`);
+      const filePath = path.join(GetIntentsDir(), `${SanitizeUserId(intent.userId)}.json`);
       fs.writeFileSync(filePath, JSON.stringify(intent, null, 2), { mode: 0o600 });
 
       console.log(`Intent saved for user ${intent.userId}`);
@@ -63,18 +65,18 @@ export class IntentStore {
    * 全ユーザーのインテントを取得する
    */
   GetAll(): readonly UserIntent[] {
-    if (!fs.existsSync(INTENTS_DIR)) {
+    if (!fs.existsSync(GetIntentsDir())) {
       return [];
     }
 
     const intents: UserIntent[] = [];
 
     try {
-      const files = fs.readdirSync(INTENTS_DIR).filter((f) => f.endsWith('.json'));
+      const files = fs.readdirSync(GetIntentsDir()).filter((f) => f.endsWith('.json'));
 
       for (const file of files) {
         try {
-          const content = fs.readFileSync(path.join(INTENTS_DIR, file), 'utf-8');
+          const content = fs.readFileSync(path.join(GetIntentsDir(), file), 'utf-8');
           intents.push(JSON.parse(content) as UserIntent);
         } catch {
           // 不正なファイルはスキップ

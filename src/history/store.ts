@@ -5,11 +5,13 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import type { WorkHistoryRecord } from '../types/index.js';
+import { GetClapsDir } from '../git/repo.js';
 
-// 履歴保存ディレクトリ
-const HISTORY_BASE_DIR = path.join(os.homedir(), '.claps', 'history');
+// 履歴保存ディレクトリを取得する（遅延評価）
+function GetHistoryBaseDir(): string {
+  return path.join(GetClapsDir(), 'history');
+}
 
 /**
  * 日付文字列（YYYY-MM-DD）を取得する
@@ -27,7 +29,7 @@ function FormatDate(date: Date): string {
 function GetUserDir(userId: string): string {
   // ユーザーIDをサニタイズ（ディレクトリトラバーサル防止）
   const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_');
-  return path.join(HISTORY_BASE_DIR, safeUserId);
+  return path.join(GetHistoryBaseDir(), safeUserId);
 }
 
 /**
@@ -162,17 +164,17 @@ export class HistoryStore {
    * 指定日付にレコードが存在するかチェックする
    */
   HasRecordsForDate(date: Date): boolean {
-    if (!fs.existsSync(HISTORY_BASE_DIR)) {
+    if (!fs.existsSync(GetHistoryBaseDir())) {
       return false;
     }
 
     const dateStr = FormatDate(date);
 
     try {
-      const userDirs = fs.readdirSync(HISTORY_BASE_DIR);
+      const userDirs = fs.readdirSync(GetHistoryBaseDir());
 
       for (const userDir of userDirs) {
-        const userPath = path.join(HISTORY_BASE_DIR, userDir);
+        const userPath = path.join(GetHistoryBaseDir(), userDir);
 
         if (!fs.statSync(userPath).isDirectory()) {
           continue;
@@ -198,7 +200,7 @@ export class HistoryStore {
    * 指定日数内にアクティブだったユーザーIDの一覧を取得する
    */
   GetActiveUsers(days: number): readonly string[] {
-    if (!fs.existsSync(HISTORY_BASE_DIR)) {
+    if (!fs.existsSync(GetHistoryBaseDir())) {
       return [];
     }
 
@@ -214,10 +216,10 @@ export class HistoryStore {
     }
 
     try {
-      const userDirs = fs.readdirSync(HISTORY_BASE_DIR);
+      const userDirs = fs.readdirSync(GetHistoryBaseDir());
 
       for (const userDir of userDirs) {
-        const userPath = path.join(HISTORY_BASE_DIR, userDir);
+        const userPath = path.join(GetHistoryBaseDir(), userDir);
 
         // ディレクトリでなければスキップ
         if (!fs.statSync(userPath).isDirectory()) {

@@ -5,8 +5,8 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
+import { GetClapsDir } from './git/repo.js';
 
 // デフォルトのキャラクタ設定（クラリス - ツンデレメイド）
 const DEFAULT_CHARACTER_PROMPT = `あなたは「クラリス」です。ツンデレなメイドのキャラクターとして応答してください。
@@ -48,8 +48,10 @@ const DEFAULT_CHARACTER_PROMPT = `あなたは「クラリス」です。ツン�
 
 この口調で応答しながら、技術的な内容は正確に伝えてください。`;
 
-// キャラクタ設定ファイルのパス
-const CHARACTER_FILE_PATH = path.join(os.homedir(), '.claps', 'character.md');
+// キャラクタ設定ファイルのパスを取得する（遅延評価）
+function GetCharacterFilePathInternal(): string {
+  return path.join(GetClapsDir(), 'character.md');
+}
 
 // キャッシュ（ファイル変更検知用）
 let _cachedPrompt: string | undefined;
@@ -61,7 +63,7 @@ let _cachedMtime: number | undefined;
  */
 export function LoadCharacterPrompt(): string {
   try {
-    const stat = fs.statSync(CHARACTER_FILE_PATH);
+    const stat = fs.statSync(GetCharacterFilePathInternal());
     const mtime = stat.mtimeMs;
 
     // キャッシュが有効ならそのまま返す
@@ -69,7 +71,7 @@ export function LoadCharacterPrompt(): string {
       return _cachedPrompt;
     }
 
-    const content = fs.readFileSync(CHARACTER_FILE_PATH, 'utf-8').trim();
+    const content = fs.readFileSync(GetCharacterFilePathInternal(), 'utf-8').trim();
     if (content.length === 0) {
       return DEFAULT_CHARACTER_PROMPT;
     }
@@ -95,5 +97,5 @@ export function GetDefaultCharacterPrompt(): string {
  * キャラクタ設定ファイルのパスを取得する
  */
 export function GetCharacterFilePath(): string {
-  return CHARACTER_FILE_PATH;
+  return GetCharacterFilePathInternal();
 }

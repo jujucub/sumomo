@@ -5,11 +5,13 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import type { ReflectionResult, TaskSuggestion } from '../types/index.js';
+import { GetClapsDir } from '../git/repo.js';
 
-// 保存ディレクトリ
-const REFLECTIONS_DIR = path.join(os.homedir(), '.claps', 'reflections');
+// 保存ディレクトリを取得する（遅延評価）
+function GetReflectionsDir(): string {
+  return path.join(GetClapsDir(), 'reflections');
+}
 
 /**
  * 内省結果ストアクラス
@@ -20,11 +22,11 @@ export class ReflectionStore {
    */
   Save(result: ReflectionResult): void {
     try {
-      if (!fs.existsSync(REFLECTIONS_DIR)) {
-        fs.mkdirSync(REFLECTIONS_DIR, { recursive: true, mode: 0o700 });
+      if (!fs.existsSync(GetReflectionsDir())) {
+        fs.mkdirSync(GetReflectionsDir(), { recursive: true, mode: 0o700 });
       }
 
-      const filePath = path.join(REFLECTIONS_DIR, `${result.date}.json`);
+      const filePath = path.join(GetReflectionsDir(), `${result.date}.json`);
       fs.writeFileSync(filePath, JSON.stringify(result, null, 2), { mode: 0o600 });
 
       console.log(`Reflection saved: ${result.date}`);
@@ -37,12 +39,12 @@ export class ReflectionStore {
    * 最新の内省結果を取得する
    */
   GetLatest(): ReflectionResult | undefined {
-    if (!fs.existsSync(REFLECTIONS_DIR)) {
+    if (!fs.existsSync(GetReflectionsDir())) {
       return undefined;
     }
 
     try {
-      const files = fs.readdirSync(REFLECTIONS_DIR)
+      const files = fs.readdirSync(GetReflectionsDir())
         .filter((f) => f.endsWith('.json'))
         .sort()
         .reverse();
@@ -52,7 +54,7 @@ export class ReflectionStore {
       }
 
       const latestFile = files[0] as string;
-      const filePath = path.join(REFLECTIONS_DIR, latestFile);
+      const filePath = path.join(GetReflectionsDir(), latestFile);
       const content = fs.readFileSync(filePath, 'utf-8');
       return JSON.parse(content) as ReflectionResult;
     } catch (error) {
@@ -65,7 +67,7 @@ export class ReflectionStore {
    * 指定日の内省結果を取得する
    */
   GetByDate(date: string): ReflectionResult | undefined {
-    const filePath = path.join(REFLECTIONS_DIR, `${date}.json`);
+    const filePath = path.join(GetReflectionsDir(), `${date}.json`);
 
     if (!fs.existsSync(filePath)) {
       return undefined;
